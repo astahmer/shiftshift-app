@@ -2,6 +2,19 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ItemKind = "note" | "todo" | "link";
 
+export type Action = "capture" | "toggle_panel" | "none";
+
+export interface Bindings {
+	left: Action;
+	right: Action;
+}
+
+export interface Template {
+	id: string;
+	name: string;
+	body: string;
+}
+
 export interface Item {
 	id: string;
 	kind: ItemKind;
@@ -42,5 +55,33 @@ export class Store {
 
 	static clearCompleted(): Promise<void> {
 		return invoke("clear_completed");
+	}
+
+	static getBindings(): Promise<Bindings> {
+		return invoke("get_bindings");
+	}
+
+	static setBindings(bindings: Bindings): Promise<void> {
+		return invoke("set_bindings", { bindings });
+	}
+
+	static exportMarkdown(): Promise<string> {
+		return invoke("export_markdown");
+	}
+
+	static listTemplates(): Promise<Template[]> {
+		return invoke("list_templates");
+	}
+
+	static addTemplate(name: string, body: string): Promise<Template> {
+		return invoke("add_template", { name, body });
+	}
+
+	static updateTemplate(id: string, name: string, body: string): Promise<void> {
+		return invoke("update_template", { id, name, body });
+	}
+
+	static deleteTemplate(id: string): Promise<void> {
+		return invoke("delete_template", { id });
 	}
 }

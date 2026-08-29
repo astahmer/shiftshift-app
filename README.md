@@ -47,6 +47,27 @@ requests" until you grant it under System Settings → Privacy & Security →
 Accessibility — until then, double-Shift capture is inactive but the
 `Cmd+Shift+Space` / `Cmd+Shift+C` fallback shortcuts still work.
 
+## Features
+
+- **Settings** (gear icon in the panel): remap what each Shift side's
+  double-tap does (capture selection / toggle panel / nothing), manage
+  snippet templates, and export to Markdown. Bindings persist to
+  `settings.json` and apply live, no restart needed.
+- **Snippet templates**: type `/name arg1 arg2` in the capture input to
+  expand a saved template. `{{var}}` placeholders fill positionally in
+  first-appearance order (a repeated `{{name}}` reuses the same arg). Manage
+  templates from Settings.
+- **Markdown export**: writes a timestamped `.md` file (grouped by
+  Todo/Note/Link, todos as checkboxes) under the app data dir and opens it.
+- **Link previews**: items detected as URLs render with a link icon and open
+  in the default browser on click (via `@tauri-apps/plugin-shell`).
+- **CLI capture** (`shift`): a companion binary that sends text to a running
+  shiftshift instance over a local TCP port (`cli_protocol.rs`), so you can
+  do `shift "buy milk"` or `git log -1 | shift` from a terminal. Requires the
+  app to already be running — it does not touch the SQLite file directly.
+  Build it alongside the app (`cargo build --bins` in `src-tauri`) or run it
+  with `cargo run --bin shift -- some text`.
+
 ## Testing
 
 ```bash
@@ -54,5 +75,13 @@ cd src-tauri
 cargo test
 ```
 
-Covers the double-Shift gesture state machine (`mac_tap.rs`) and the local
-SQLite store CRUD (`store/local.rs`).
+Covers the double-Shift gesture state machine (`mac_tap.rs`), the local
+SQLite store CRUD (`store/local.rs`), settings/template persistence,
+Markdown export formatting, and the CLI's line-capture logic.
+
+Frontend logic (kind detection, template expansion, capture resolution) has
+Vitest unit tests:
+
+```bash
+npm test
+```

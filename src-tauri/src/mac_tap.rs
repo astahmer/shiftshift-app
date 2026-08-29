@@ -25,10 +25,11 @@ use core_graphics::event::{
     CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventTapProxy, CGEventType,
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::capture::{self, action_for, Action, Bindings, Side, HOLD_LIMIT, TAP_WINDOW};
 use crate::panel;
+use crate::settings::SettingsState;
 
 const NX_DEVICELSHIFTKEYMASK: u64 = 0x0000_0002;
 const NX_DEVICERSHIFTKEYMASK: u64 = 0x0000_0004;
@@ -128,7 +129,6 @@ fn on_flags_changed(state: &RefCell<State>, flags: u64, now: Instant, bindings: 
 
 fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
     let state = RefCell::new(State { prev_flags: 0, pressed: None, dirty: false, last_tap: None });
-    let bindings = Bindings::default();
     let port: Arc<AtomicPtr<c_void>> = Arc::new(AtomicPtr::new(ptr::null_mut()));
     let port_cb = Arc::clone(&port);
     let app_cb = app.clone();
@@ -152,6 +152,7 @@ fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
                     s.last_tap = None;
                 }
                 CGEventType::FlagsChanged => {
+                    let bindings = *app_cb.state::<SettingsState>().0.lock().unwrap();
                     match on_flags_changed(&state, event.get_flags().bits(), Instant::now(), bindings) {
                         Action::Capture => capture::capture_selection(&app_cb),
                         Action::TogglePanel => panel::toggle(&app_cb),

@@ -3,9 +3,12 @@ use std::time::Duration;
 #[cfg(not(target_os = "macos"))]
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{db, panel};
+#[cfg(not(target_os = "macos"))]
+use crate::settings;
 
 /// Marker written to the clipboard before simulating copy, so "nothing was
 /// selected" can be told apart from "the same text was copied again".
@@ -19,18 +22,19 @@ pub(crate) enum Side {
     Right,
 }
 
-/// Which double-tap gesture triggers which action. Hardcoded to shiftshift's
-/// original mapping today (left = capture selection, right = toggle panel);
-/// kept as its own type rather than inline booleans so a future settings
-/// screen can make this user-configurable without touching the tap logic.
-#[derive(Clone, Copy)]
-pub(crate) struct Bindings {
+/// Which double-tap gesture triggers which action. Defaults to shiftshift's
+/// original mapping (left = capture selection, right = toggle panel) but is
+/// user-configurable from the settings screen; persisted via `settings.rs`
+/// and read live by both tap listeners so a change applies without restart.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct Bindings {
     pub left: Action,
     pub right: Action,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Action {
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Action {
     Capture,
     TogglePanel,
     None,
@@ -63,7 +67,6 @@ fn run_action(app: &AppHandle, action: Action) {
 #[cfg(not(target_os = "macos"))]
 pub fn start_double_shift_listener(app: AppHandle) {
     std::thread::spawn(move || {
-        let bindings = Bindings::default();
         let mut pressed: Option<(Side, Instant)> = None;
         let mut dirty = false;
         let mut last_tap: Option<(Side, Instant)> = None;
@@ -105,6 +108,7 @@ pub fn start_double_shift_listener(app: AppHandle) {
                     if let Some((s, t)) = last_tap {
                         if s == side && t.elapsed() < TAP_WINDOW {
                             last_tap = None;
+                            let bindings = *app.state::<settings::SettingsState>().0.lock().unwrap();
                             run_action(&app, action_for(bindings, side));
                             return;
                         }

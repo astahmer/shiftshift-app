@@ -9,6 +9,7 @@
 		"core:window:allow-hide",
 		"core:window:allow-set-focus",
 		"global-shortcut:default",
-		"autostart:default"
+		"autostart:default",
+		"shell:allow-open"
 	]
 }
