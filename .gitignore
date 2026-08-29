@@ -4,3 +4,6 @@ src-tauri/target/
 src-tauri/gen/
 .DS_Store
 *.sqlite3
+result
+result-*
+.direnv/

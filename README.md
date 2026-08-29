@@ -28,18 +28,42 @@ either.
 
 ## Requirements
 
-- Node 20+, npm
-- Rust (stable) via [rustup](https://rustup.rs)
+- Node 24.19.0, pnpm 12.1.0 (both pinned — see below)
+- Rust 1.93.0 (stable)
 - macOS: Xcode Command Line Tools
 
+All dependency versions (npm and Cargo) are pinned exactly (no `^`/`=`-less
+ranges) — bump them deliberately, not implicitly on `install`.
+
 If your shell's `cc`/`ld` resolve to a non-Apple toolchain (e.g. via Nix), see
-`.cargo/config.toml` — it pins the linker to `/usr/bin/cc` for this project.
+`.cargo/config.toml` — it pins the linker and `CC`/`CXX` to `/usr/bin/cc` /
+`/usr/bin/c++` for this project, by absolute path, so it wins regardless of
+what's earlier on `PATH`.
+
+### Option A: Nix flake (reproducible, recommended if you have Nix)
+
+```bash
+nix develop
+```
+
+Drops you into a shell with the exact pinned Rust toolchain, Node, and (via
+Corepack) pnpm 12.1.0 — no rustup/nvm setup needed. See `flake.nix` for why it
+doesn't need to fight the Nix-cc-shadowing problem above: the `.cargo/config.toml`
+override already wins regardless of what the flake puts on `PATH`.
+
+### Option B: rustup + your own Node
+
+```bash
+rustup toolchain install 1.93.0
+corepack enable   # or: npm i -g corepack
+corepack use pnpm@12.1.0
+```
 
 ## Development
 
 ```bash
-npm install
-npm run tauri dev
+pnpm install
+pnpm tauri dev
 ```
 
 On first run, macOS will show the app as "not responding to Accessibility
@@ -83,5 +107,5 @@ Frontend logic (kind detection, template expansion, capture resolution) has
 Vitest unit tests:
 
 ```bash
-npm test
+pnpm test
 ```

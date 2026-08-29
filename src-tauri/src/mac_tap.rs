@@ -22,7 +22,7 @@ use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPortRef;
 use core_foundation::runloop::{kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop};
 use core_graphics::event::{
-    CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CallbackResult, CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventTapProxy, CGEventType,
 };
 use tauri::{AppHandle, Manager};
@@ -161,14 +161,14 @@ fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
                 }
                 _ => {}
             }
-            None
+            CallbackResult::Keep
         },
     )
     .map_err(|()| "could not create the event tap")?;
 
-    let port_ref = tap.mach_port.as_concrete_TypeRef();
+    let port_ref = tap.mach_port().as_concrete_TypeRef();
     port.store(port_ref as *mut c_void, Ordering::Relaxed);
-    let source = tap.mach_port.create_runloop_source(0).map_err(|()| "could not attach the tap to a run loop")?;
+    let source = tap.mach_port().create_runloop_source(0).map_err(|()| "could not attach the tap to a run loop")?;
     CFRunLoop::get_current().add_source(&source, unsafe { kCFRunLoopCommonModes });
     tap.enable();
 
