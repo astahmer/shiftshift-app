@@ -79,7 +79,6 @@ function renderList(): void {
 function buildRow(item: Item, index: number): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "item-row";
-	row.dataset.kind = item.kind;
 	row.dataset.done = String(item.done);
 	row.classList.toggle("selected", index === selected);
 	row.onclick = () => {
@@ -87,14 +86,7 @@ function buildRow(item: Item, index: number): HTMLElement {
 		renderList();
 	};
 
-	const check = document.createElement("div");
-	check.className = "item-check";
-	check.dataset.done = String(item.done);
-	check.onclick = (e) => {
-		e.stopPropagation();
-		void Store.toggleDone(item.id).then(refresh);
-	};
-	row.appendChild(check);
+	row.appendChild(buildIcon(item));
 
 	const text = document.createElement("div");
 	text.className = "item-text";
@@ -144,6 +136,24 @@ function buildRow(item: Item, index: number): HTMLElement {
 
 	row.appendChild(actions);
 	return row;
+}
+
+/** Leading icon slot: an interactive checkbox for todos, a decorative kind glyph otherwise. */
+function buildIcon(item: Item): HTMLElement {
+	if (item.kind === "todo") {
+		const check = document.createElement("div");
+		check.className = "item-icon item-check";
+		check.dataset.done = String(item.done);
+		check.onclick = (e) => {
+			e.stopPropagation();
+			void Store.toggleDone(item.id).then(refresh);
+		};
+		return check;
+	}
+	const icon = document.createElement("div");
+	icon.className = `item-icon item-icon-${item.kind}`;
+	icon.textContent = item.kind === "link" ? "↗" : "●";
+	return icon;
 }
 
 let editingId: string | null = null;
