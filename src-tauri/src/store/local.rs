@@ -136,6 +136,13 @@ impl Store for LocalSqliteStore {
         Ok(())
     }
 
+    fn update_text(&self, id: &str, text: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("UPDATE items SET text = ?1 WHERE id = ?2", params![text, id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn delete_item(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM items WHERE id = ?1", params![id])
@@ -196,6 +203,14 @@ mod tests {
         let item = s.add_item("call mom", ItemKind::Note, None).unwrap();
         s.set_kind(&item.id, ItemKind::Todo).unwrap();
         assert_eq!(s.list_items().unwrap()[0].kind, ItemKind::Todo);
+    }
+
+    #[test]
+    fn update_text_changes_an_items_text() {
+        let s = store();
+        let item = s.add_item("typo", ItemKind::Note, None).unwrap();
+        s.update_text(&item.id, "fixed").unwrap();
+        assert_eq!(s.list_items().unwrap()[0].text, "fixed");
     }
 
     #[test]

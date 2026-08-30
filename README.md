@@ -14,8 +14,8 @@ either.
   codebase.
 - **Vanilla TypeScript frontend**, no React — this is a tiny, latency-critical
   overlay that opens/closes constantly; no VDOM diffing in the capture path.
-- **Unified item model** (`kind: note | todo | link`, `done`, `pinned`, `rank`)
-  instead of separate note/todo/clipboard concepts — see
+- **Unified item model** (`kind: note | todo | link`, `done`, `bookmarked`,
+  `rank`) instead of separate note/todo/clipboard concepts — see
   `src-tauri/src/store/mod.rs`.
 - **Native double-Shift hook**: a real `CGEventTap` on macOS
   (`src-tauri/src/mac_tap.rs`), `rdev` on Linux/Windows
@@ -73,10 +73,31 @@ Accessibility — until then, double-Shift capture is inactive but the
 
 ## Features
 
-- **Settings** (gear icon in the panel): remap what each Shift side's
-  double-tap does (capture selection / toggle panel / nothing), manage
-  snippet templates, and export to Markdown. Bindings persist to
-  `settings.json` and apply live, no restart needed.
+- **Settings** (gear icon in the panel): theme, double-shift bindings,
+  fallback shortcuts, notifications, snippet templates, Markdown export. All
+  persist to `settings.json` and apply live, no restart needed.
+- **Themes**: 16 presets (Tokyo Night, Dracula, Nord, Catppuccin, Gruvbox,
+  Rosé Pine, Solarized, GitHub, VS Code, One Dark — each with a light/dark
+  sibling) — see `src/themes.ts`. Switch from Settings or via `/light`,
+  `/dark` (jumps to the current theme's light/dark sibling), `/theme <name>`.
+- **Native vibrancy**: the panel uses macOS `NSVisualEffectView` / Windows DWM
+  acrylic (`src-tauri/src/vibrancy.rs`, ported from cooper's `glass.rs`).
+- **Keyboard-driven list**: typing filters the list below (fuzzy-ish
+  substring match, plus tag filters — `@bookmarks`/`@links`/`@todos`/`@notes`
+  or the equivalent `has:x` form, combinable with a text query e.g.
+  `@todos ship`). `↑`/`↓` selects a row, `Enter` acts on it (copies
+  note/todo text, opens a link), `⌘Enter` always saves the typed text as a
+  new item regardless of selection. `Space` toggles a selected todo's done
+  state, `⌘B` bookmarks, `⌘E` edits inline, `Backspace`/`Delete` (with the
+  input empty) deletes. `Escape` hides the panel.
+- **Duplicate hint**: a non-blocking inline note ("Already saved") appears
+  while typing text that exactly matches an existing item — saving anyway
+  is still one Enter away.
+- **Triple-tap → todo**: a third Shift tap fast-following a capture double-tap
+  flips that just-saved item to a todo, without delaying the double-tap's own
+  (instant) fire — see the `Fired::PromoteToTodo` path in `capture.rs`.
+- **Save notifications**: opt-in (off by default), with an optional sound —
+  see Settings → Notifications.
 - **Snippet templates**: type `/name arg1 arg2` in the capture input to
   expand a saved template. `{{var}}` placeholders fill positionally in
   first-appearance order (a repeated `{{name}}` reuses the same arg). Manage
@@ -92,6 +113,16 @@ Accessibility — until then, double-Shift capture is inactive but the
   Build it alongside the app (`cargo build --bins` in `src-tauri`) or run it
   with `cargo run --bin shift -- some text`.
 
+### Not (yet) implemented
+
+Flagged during the production-readiness pass but out of scope for it: sync
+backends (remote storage needs an auth UI, a background sync loop, and —
+per the conflict-resolution note in `store/mod.rs` — a real answer to
+concurrent-edit merging before it's worth building at all); a tray icon /
+close-to-tray / autostart wiring (the `tauri-plugin-autostart` dependency is
+already installed but unused); inline Markdown rendering in the item list;
+fractional manual reordering; a clipboard-watch auto-capture mode.
+
 ## Testing
 
 ```bash
@@ -99,12 +130,13 @@ cd src-tauri
 cargo test
 ```
 
-Covers the double-Shift gesture state machine (`mac_tap.rs`), the local
-SQLite store CRUD (`store/local.rs`), settings/template persistence,
-Markdown export formatting, and the CLI's line-capture logic.
+Covers the double-Shift and triple-tap gesture state machine (`mac_tap.rs`),
+the local SQLite store CRUD (`store/local.rs`), settings/template
+persistence, Markdown export formatting, the notification excerpt
+formatting, and the CLI's line-capture logic.
 
-Frontend logic (kind detection, template expansion, capture resolution) has
-Vitest unit tests:
+Frontend logic (kind detection, template expansion, capture resolution, list
+filtering, duplicate detection, UI slash commands) has Vitest unit tests:
 
 ```bash
 pnpm test

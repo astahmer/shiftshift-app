@@ -42,6 +42,13 @@ pub fn set_kind(db: State<Db>, app: AppHandle, id: String, kind: ItemKind) -> Re
 }
 
 #[tauri::command]
+pub fn update_item_text(db: State<Db>, app: AppHandle, id: String, text: String) -> Result<(), String> {
+    db.0.update_text(&id, &text)?;
+    let _ = app.emit("refresh", ());
+    Ok(())
+}
+
+#[tauri::command]
 pub fn delete_item(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
     db.0.delete_item(&id)?;
     let _ = app.emit("refresh", ());

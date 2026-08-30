@@ -61,6 +61,7 @@ pub fn run() {
             commands::toggle_done,
             commands::toggle_bookmarked,
             commands::set_kind,
+            commands::update_item_text,
             commands::delete_item,
             commands::clear_completed,
             commands::get_settings,

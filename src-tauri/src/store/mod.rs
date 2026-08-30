@@ -56,6 +56,7 @@ pub trait Store: Send + Sync {
     fn toggle_done(&self, id: &str) -> Result<(), String>;
     fn toggle_bookmarked(&self, id: &str) -> Result<(), String>;
     fn set_kind(&self, id: &str, kind: ItemKind) -> Result<(), String>;
+    fn update_text(&self, id: &str, text: &str) -> Result<(), String>;
     fn delete_item(&self, id: &str) -> Result<(), String>;
     fn clear_completed(&self) -> Result<(), String>;
 }
