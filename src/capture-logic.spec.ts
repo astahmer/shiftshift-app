@@ -3,12 +3,14 @@ import {
 	applySort,
 	detectKind,
 	expandTemplate,
+	extractTags,
 	filterItems,
 	findDuplicate,
 	formatRelativeTime,
 	isImportableTheme,
 	lastToken,
 	matchAtSuggestions,
+	matchHashSuggestions,
 	matchSlashSuggestions,
 	matchSortSuggestions,
 	matchThemeSuggestions,
@@ -345,6 +347,41 @@ describe("parseInlineMarkdown", () => {
 
 	it("returns a single empty text segment for empty input", () => {
 		expect(parseInlineMarkdown("")).toEqual([{ type: "text", text: "" }]);
+	});
+
+	it("parses a hashtag as a tag segment", () => {
+		expect(parseInlineMarkdown("check #work later")).toEqual([
+			{ type: "text", text: "check " },
+			{ type: "tag", text: "#work" },
+			{ type: "text", text: " later" },
+		]);
+	});
+
+	it("does not treat a numeric reference as a hashtag", () => {
+		expect(parseInlineMarkdown("fixes #482")).toEqual([{ type: "text", text: "fixes #482" }]);
+	});
+});
+
+describe("extractTags", () => {
+	it("collects unique lowercased hashtags across items", () => {
+		const list = [item({ text: "plan #Work stuff" }), item({ text: "more #work and #life" })];
+		expect(extractTags(list)).toEqual(["life", "work"]);
+	});
+
+	it("ignores numeric-only references", () => {
+		expect(extractTags([item({ text: "see issue #482" })])).toEqual([]);
+	});
+});
+
+describe("matchHashSuggestions", () => {
+	const list = [item({ text: "#work" }), item({ text: "#worship" }), item({ text: "#life" })];
+
+	it("filters existing tags by prefix", () => {
+		expect(matchHashSuggestions("#wor", list)).toEqual(["work", "worship"]);
+	});
+
+	it("returns everything for a bare #", () => {
+		expect(matchHashSuggestions("#", list)).toEqual(["life", "work", "worship"]);
 	});
 });
 

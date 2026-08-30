@@ -250,18 +250,21 @@ export function formatRelativeTime(iso: string, now: number = Date.now()): strin
 	return new Date(iso).toLocaleDateString();
 }
 
-export type MdSegmentType = "text" | "bold" | "italic" | "code";
+export type MdSegmentType = "text" | "bold" | "italic" | "code" | "tag";
 export interface MdSegment {
 	type: MdSegmentType;
 	text: string;
 }
 
-const INLINE_MARKDOWN = /\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*/g;
+// Hashtags must start with a letter/underscore, not a digit — otherwise
+// "fixes #482" or "PR #17" would render as a tag pill, which is a much more
+// common pattern in captured notes than an actual `#42`-style hashtag.
+const INLINE_MARKDOWN = /\*\*([^*]+)\*\*|`([^`]+)`|(#[A-Za-z_][\w-]*)|\*([^*]+)\*/g;
 
 /**
  * Lightweight inline-only Markdown for item rows: **bold**, *italic*,
- * `code` — no blocks, no nesting, no links. Just enough to make short
- * snippets and emphasis readable in a single-line row.
+ * `code`, and #hashtags — no blocks, no nesting, no links. Just enough to
+ * make short snippets, emphasis, and tags readable in a single-line row.
  */
 export function parseInlineMarkdown(text: string): MdSegment[] {
 	const segments: MdSegment[] = [];
@@ -272,12 +275,32 @@ export function parseInlineMarkdown(text: string): MdSegment[] {
 		if (match.index > lastIndex) segments.push({ type: "text", text: text.slice(lastIndex, match.index) });
 		if (match[1] !== undefined) segments.push({ type: "bold", text: match[1] });
 		else if (match[2] !== undefined) segments.push({ type: "code", text: match[2] });
-		else if (match[3] !== undefined) segments.push({ type: "italic", text: match[3] });
+		else if (match[3] !== undefined) segments.push({ type: "tag", text: match[3] });
+		else if (match[4] !== undefined) segments.push({ type: "italic", text: match[4] });
 		lastIndex = INLINE_MARKDOWN.lastIndex;
 	}
 	if (lastIndex < text.length) segments.push({ type: "text", text: text.slice(lastIndex) });
 	if (segments.length === 0) segments.push({ type: "text", text: "" });
 	return segments;
+}
+
+const HASHTAG_PATTERN = /#([A-Za-z_][\w-]*)/g;
+
+/** Every distinct #hashtag used across all items, lowercased and sorted — powers `#` suggestions. */
+export function extractTags(items: Item[]): string[] {
+	const seen = new Set<string>();
+	for (const item of items) {
+		for (const match of item.text.matchAll(HASHTAG_PATTERN)) {
+			seen.add(match[1]!.toLowerCase());
+		}
+	}
+	return [...seen].sort();
+}
+
+/** What an in-progress `#partial` token could complete to, from tags already in use. */
+export function matchHashSuggestions(partial: string, items: Item[]): string[] {
+	const q = partial.replace(/^#/, "").toLowerCase();
+	return extractTags(items).filter((t) => t.startsWith(q));
 }
 
 const THEME_COLOR_KEYS: Array<keyof ThemeColors> = ["bg", "fg", "muted", "row_bg", "accent", "accent_fg", "border"];

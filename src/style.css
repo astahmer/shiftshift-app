@@ -175,10 +175,120 @@
 	--border: #e0dab8;
 }
 
+/* --- Specialty themes: these override structural tokens (radius/shadow/
+   backdrop/border-width), not just colors, since "glassmorphism" or
+   "neobrutalism" is as much a shape language as a palette. --- */
+
+[data-theme="glass"] {
+	color-scheme: dark;
+	--bg: #1c1f2e;
+	--fg: #f2f4ff;
+	--muted: #aab0c8;
+	--row-bg: #2a2f45;
+	--accent: #8ecdf7;
+	--accent-fg: #0b1020;
+	--border: rgba(255, 255, 255, 0.22);
+	--bg-alpha: 42%;
+	--backdrop-blur: 28px;
+	--radius: 20px;
+	--radius-sm: 12px;
+	--shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="neobrutalism"] {
+	color-scheme: light;
+	--bg: #fff9e6;
+	--fg: #111111;
+	--muted: #55524a;
+	--row-bg: #ffe9a8;
+	--accent: #ff3ec8;
+	--accent-fg: #111111;
+	--border: #111111;
+	--bg-alpha: 100%;
+	--backdrop-blur: 0px;
+	--radius: 0px;
+	--radius-sm: 0px;
+	--panel-border-width: 3px;
+	--shadow: 10px 10px 0 0 #111111;
+}
+
+[data-theme="paper"] {
+	color-scheme: light;
+	--bg: #f6f1e6;
+	--fg: #2b2621;
+	--muted: #8a8072;
+	--row-bg: #efe7d6;
+	--accent: #a1552f;
+	--accent-fg: #f6f1e6;
+	--border: #d9cdb4;
+	--bg-alpha: 97%;
+	--backdrop-blur: 0px;
+	--radius: 10px;
+	--radius-sm: 4px;
+	--shadow: 0 8px 24px rgba(60, 50, 30, 0.18);
+}
+
+[data-theme="win95"] {
+	color-scheme: light;
+	--bg: #c0c0c0;
+	--fg: #000000;
+	--muted: #4d4d4d;
+	--row-bg: #dfdfdf;
+	--accent: #000080;
+	--accent-fg: #ffffff;
+	--border: #7f7f7f;
+	--bg-alpha: 100%;
+	--backdrop-blur: 0px;
+	--radius: 0px;
+	--radius-sm: 0px;
+	--panel-border-width: 2px;
+	--shadow: 4px 4px 0 0 #000000;
+}
+
+[data-theme="raycast"] {
+	color-scheme: dark;
+	--bg: #141414;
+	--fg: #f2f2f2;
+	--muted: #8a8a8a;
+	--row-bg: #1f1f1f;
+	--accent: #ff6363;
+	--accent-fg: #141414;
+	--border: #2b2b2b;
+	--bg-alpha: 92%;
+	--backdrop-blur: 0px;
+	--radius: 14px;
+	--radius-sm: 8px;
+	--shadow: 0 20px 45px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="discord"] {
+	color-scheme: dark;
+	--bg: #313338;
+	--fg: #f2f3f5;
+	--muted: #949ba4;
+	--row-bg: #2b2d31;
+	--accent: #5865f2;
+	--accent-fg: #ffffff;
+	--border: #1e1f22;
+	--bg-alpha: 94%;
+	--backdrop-blur: 0px;
+	--radius: 12px;
+	--radius-sm: 6px;
+	--shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+}
+
 :root {
 	font-family:
 		-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	font-size: 14px;
+	/* Structural defaults, matching the plain palette themes' original
+	   hardcoded look — specialty themes above override a subset of these. */
+	--radius: 16px;
+	--radius-sm: 10px;
+	--panel-border-width: 1px;
+	--bg-alpha: 90%;
+	--backdrop-blur: 0px;
+	--shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
 }
 
 * {
@@ -198,10 +308,13 @@ body {
 	gap: 10px;
 	padding: 12px;
 	height: 100vh;
-	background: color-mix(in srgb, var(--bg) 90%, transparent);
-	border-radius: 16px;
-	border: 1px solid var(--border);
-	box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+	position: relative;
+	background: color-mix(in srgb, var(--bg) var(--bg-alpha, 90%), transparent);
+	border-radius: var(--radius, 16px);
+	border: var(--panel-border-width, 1px) solid var(--border);
+	box-shadow: var(--shadow, 0 16px 40px rgba(0, 0, 0, 0.35));
+	backdrop-filter: blur(var(--backdrop-blur, 0px));
+	-webkit-backdrop-filter: blur(var(--backdrop-blur, 0px));
 }
 
 ::-webkit-scrollbar {
@@ -226,7 +339,7 @@ body {
 	flex: 1;
 	background: var(--row-bg);
 	border: 1px solid var(--border);
-	border-radius: 10px;
+	border-radius: var(--radius-sm, 10px);
 	padding: 11px 13px;
 	color: var(--fg);
 	font-size: 15px;
@@ -259,7 +372,7 @@ body {
 	justify-content: center;
 	background: var(--row-bg);
 	border: 1px solid var(--border);
-	border-radius: 10px;
+	border-radius: var(--radius-sm, 10px);
 	color: var(--muted);
 	font-size: 15px;
 	cursor: pointer;
@@ -280,9 +393,16 @@ body {
 	overflow-y: auto;
 	padding-top: 4px;
 	border-top: 1px solid var(--border);
+	/* Without this, the list has no bounded height (only `overflow-y: auto`,
+	   nothing forcing it to actually stop growing) — its content pushes
+	   `.meta-bar` and everything after it past the bottom of the fixed-size
+	   window, where it's silently clipped rather than visible or scrollable. */
+	flex: 1;
+	min-height: 0;
 }
 
 .meta-bar {
+	flex: none;
 	padding: 4px 6px 0;
 	font-size: 10.5px;
 	color: var(--muted);
@@ -318,7 +438,7 @@ body {
 	align-items: center;
 	gap: 8px;
 	background: var(--row-bg);
-	border-radius: 10px;
+	border-radius: var(--radius-sm, 10px);
 	padding: 8px 10px;
 	font-size: 13.5px;
 }
@@ -333,7 +453,7 @@ body {
 	background: var(--bg);
 	color: var(--fg);
 	border: 1px solid var(--border);
-	border-radius: 6px;
+	border-radius: calc(var(--radius-sm, 10px) * 0.6);
 	padding: 6px 8px;
 	font-size: 13px;
 }
@@ -411,7 +531,7 @@ body {
 	flex-direction: column;
 	gap: 6px;
 	background: var(--row-bg);
-	border-radius: 10px;
+	border-radius: var(--radius-sm, 10px);
 	padding: 8px 10px;
 	margin: 2px 0;
 }
@@ -441,7 +561,7 @@ body {
 	width: 100%;
 	height: 26px;
 	padding: 2px;
-	border-radius: 6px;
+	border-radius: calc(var(--radius-sm, 10px) * 0.6);
 	background: var(--bg);
 	border: 1px solid var(--border);
 }
@@ -460,11 +580,12 @@ body {
 	align-items: center;
 	gap: 10px;
 	background: transparent;
-	border-radius: 9px;
+	border-radius: calc(var(--radius-sm, 10px) * 0.9);
 	padding: 7px 8px;
 	font-size: 13.5px;
 	cursor: default;
 	transition: background 0.08s ease;
+	position: relative;
 }
 
 .item-row:hover {
@@ -541,6 +662,34 @@ body {
 	background: color-mix(in srgb, var(--fg) 12%, transparent);
 	border-radius: 3px;
 	padding: 0 4px;
+}
+
+.md-tag {
+	color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 16%, transparent);
+	border-radius: 999px;
+	padding: 0 7px;
+	font-size: 0.88em;
+	font-weight: 600;
+}
+
+/* Bookmarked items get a persistent accent-colored left edge, not just the
+   star button (which only shows on hover/select) — so a bookmark is visible
+   while just scanning the list, not only when interacting with a row. */
+.item-row[data-bookmarked="true"]::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 4px;
+	bottom: 4px;
+	width: 3px;
+	border-radius: 2px;
+	background: var(--accent);
+	opacity: 0.7;
+}
+
+.item-row[data-bookmarked="true"] {
+	padding-left: 14px;
 }
 
 /* Subtle relative-time label — replaced by the action buttons on hover/select so it never competes with them. */
@@ -669,4 +818,127 @@ body {
 
 .item-delete:hover {
 	color: color-mix(in srgb, red 55%, var(--fg));
+}
+
+.item-favicon {
+	flex: none;
+	width: 14px;
+	height: 14px;
+	border-radius: 3px;
+}
+
+.link-content {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.link-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+/* --- Detail view (Shift+Right on a selected row) --- */
+
+.detail-view {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	overflow-y: auto;
+	padding-top: 8px;
+	border-top: 1px solid var(--border);
+	flex: 1;
+	min-height: 0;
+}
+
+.detail-view[hidden] {
+	display: none;
+}
+
+.detail-text {
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: 14px;
+	line-height: 1.5;
+	padding: 4px 2px;
+}
+
+.detail-image {
+	max-width: 100%;
+	max-height: 220px;
+	object-fit: contain;
+	border-radius: var(--radius-sm, 10px);
+	align-self: flex-start;
+}
+
+.detail-meta {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	background: var(--row-bg);
+	border-radius: var(--radius-sm, 10px);
+	padding: 8px 10px;
+	font-size: 12px;
+}
+
+.detail-meta-row {
+	display: flex;
+	justify-content: space-between;
+	gap: 10px;
+	color: var(--muted);
+}
+
+.detail-meta-row span:last-child {
+	color: var(--fg);
+	text-align: right;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.detail-actions {
+	display: flex;
+	gap: 6px;
+}
+
+.detail-actions button {
+	background: var(--row-bg);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: calc(var(--radius-sm, 10px) * 0.6);
+	padding: 6px 10px;
+	font-size: 12.5px;
+	cursor: pointer;
+}
+
+.detail-actions button:hover {
+	border-color: var(--accent);
+}
+
+.detail-hint {
+	color: var(--muted);
+	font-size: 11px;
+}
+
+/* --- Transient status toast (undo/redo confirmations) --- */
+
+.status-toast {
+	position: absolute;
+	bottom: 10px;
+	left: 50%;
+	transform: translateX(-50%);
+	background: var(--row-bg);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	border-radius: calc(var(--radius-sm, 10px) * 0.6);
+	padding: 5px 12px;
+	font-size: 11.5px;
+	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+	pointer-events: none;
+}
+
+.status-toast[hidden] {
+	display: none;
 }

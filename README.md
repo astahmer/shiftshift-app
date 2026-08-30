@@ -83,9 +83,13 @@ work.
   bindings, fallback shortcuts, notifications, sync backend, snippet
   templates, Markdown export, history. All persist to `settings.json` and
   apply live, no restart needed (except the sync backend choice).
-- **Themes**: 16 built-in presets (Tokyo Night, Dracula, Nord, Catppuccin,
+- **Themes**: 22 built-in presets (Tokyo Night, Dracula, Nord, Catppuccin,
   Gruvbox, Rosé Pine, Solarized, GitHub, VS Code, One Dark — each with a
-  light/dark sibling) — see `src/themes.ts`. Switch from Settings, or type
+  light/dark sibling — plus Glass, Neobrutalism, Paper, Windows 95, Raycast,
+  and Discord, which also override structural tokens like corner radius,
+  shadow, border width, and backdrop blur, not just colors — see the
+  `--radius`/`--shadow`/`--backdrop-blur`/`--bg-alpha` custom properties in
+  `src/style.css`) — see `src/themes.ts`. Switch from Settings, or type
   `/theme` (suggests every theme, filtered as you keep typing), `/light`/
   `/dark` (suggests just that mode's themes). Both live-preview the
   highlighted suggestion as you arrow through it — `Enter` persists,
@@ -109,27 +113,36 @@ work.
 - **Keyboard-driven list**: typing filters the list below (substring match,
   plus tag filters — `@bookmarks`/`@links`/`@todos`/`@notes` or the
   equivalent `has:x` form, combinable with a text query e.g. `@todos ship`).
-  `↑`/`↓` selects a row, `Enter` acts on it and closes the panel (copies
-  note/todo text, opens a link, copies an image back to the clipboard),
-  Typing `@` also suggests the available filter tags directly (`Tab` or
-  `Enter` on a highlighted one completes it), so you don't need to already
-  know the tag names. `↑`/`↓` selects a row, `Enter` acts on it and closes
-  the panel (copies note/todo text, opens a link, copies an image back to
-  the clipboard), `⌘Enter` always saves the typed text as a new item
-  regardless of selection. `Shift+Enter` adds the selected row to a
+  Typing `@` also suggests the available filter tags directly, and typing
+  `#` suggests hashtags already in use across your items (both: `Tab` or
+  `Enter` on a highlighted one completes it) — `#hashtags` anywhere in an
+  item's text also render as a small pill in the row.
+  `↑`/`↓` selects a row, `Enter` copies note/todo text (or opens a link, or
+  copies an image back to the clipboard) and closes the panel; `⌘C` does the
+  same but leaves the panel open. `⌘Enter` always saves the typed text as a
+  new item regardless of selection. `Shift+Enter` adds the selected row to a
   multi-selection; plain `Enter` with one or more selected copies them as a
   numbered list ("1. foo\n2. bar") and closes. `Space` toggles a selected
-  todo's done state, `⌘B` bookmarks, `⌘T` toggles todo/not-todo, `⌘E` edits
-  inline, `⌥↑`/`⌥↓` reorders (unfiltered view only — holding it keeps
-  walking the *same* item through the list, not whatever else ends up under
-  the cursor after each step), `Backspace`/`Delete` (input empty) deletes.
-  `Escape` reverts an in-progress theme/sort preview, then clears a pending
-  multi-selection, then closes Settings if open, then hides the panel — it
-  does each in its own keypress, never more than one at a time. A subtle
-  relative-time label sits on each row (hidden in favor of the action
-  buttons on hover/select), and selecting a row shows a one-line detail
-  strip below the list — source app, content type, created-at, and copy
-  count/last-copied, Raycast-style, derived from `history`'s "used" events.
+  todo's done state, `⌘B` bookmarks (bookmarked rows get a persistent accent
+  bar on the left edge, not just the star button on hover), `⌘T` toggles
+  todo/not-todo, `⌘E` edits inline, `⌥↑`/`⌥↓` reorders (unfiltered view
+  only — holding it keeps walking the *same* item through the list, not
+  whatever else ends up under the cursor after each step), `⌘Backspace`/
+  `⌘Delete` (input empty) deletes — the bare key without `⌘` no longer does,
+  so a stray Delete/Backspace while just browsing can't wipe a row by
+  accident. `Shift+→` opens a full detail view for the selected row (complete
+  untruncated text, all dates, copy count, action buttons) — `Shift+←` or
+  `Escape` goes back. `⌘Z`/`⌘⇧Z` undoes/redoes the last mutation made
+  through this UI (add, delete, edit, bookmark, todo-convert, reorder) —
+  session-scoped, not persisted across restarts. `Escape` reverts an
+  in-progress theme/sort preview, then closes the detail view if open, then
+  clears a pending multi-selection, then closes Settings if open, then hides
+  the panel — it does each in its own keypress, never more than one at a
+  time. A subtle relative-time label sits on each row (hidden in favor of
+  the action buttons on hover/select), and selecting a row shows a one-line
+  detail strip below the list — source app, content type, created-at, and
+  copy count/last-copied, Raycast-style, derived from `history`'s "used"
+  events.
 - **Click-outside to close**: losing focus (clicking another app) hides the
   panel — opt out via Settings → "Hide when the panel loses focus".
 - **Duplicate hint**: a non-blocking inline note ("Already saved") appears
@@ -162,16 +175,28 @@ work.
   Todo/Note/Link/Image, todos as checkboxes, images as `![]()`) under the
   app data dir and opens it.
 - **Link previews**: items detected as URLs render with a link icon and open
-  in the default browser on click (via `@tauri-apps/plugin-shell`).
+  in the default browser on click (via `@tauri-apps/plugin-shell`). The
+  page's `<title>` and favicon are fetched once (Rust-side `ureq` GET,
+  `src-tauri/src/link_preview.rs` — plain string search for `<title>`/
+  `<link rel="icon">` rather than a full HTML parser dependency) and shown
+  in place of the raw URL; the favicon `<img>` loads cross-origin directly
+  in the webview (unaffected by CORS, which only blocks script-readable
+  fetches), so only the title/favicon-URL lookup needs to go through Rust.
+  Cached in memory for the session, not persisted.
 - **Images**: `⌘Shift+I` (configurable) or Settings → Images → "Capture
   image" saves whatever's on the system clipboard as a PNG under the app
   data dir; the item renders as a thumbnail, and clicking it copies the
   image back to the clipboard.
-- **Tray icon**: left-click toggles the panel; the menu's Show/Quit are the
-  only things that actually quit the app — Cmd+Q / Dock ▸ Quit are
-  intercepted (`RunEvent::ExitRequested` with `code: None`) so the panel
+- **Tray icon and Dock presence** (both off by default — Settings →
+  Visibility): this app is meant to be summoned purely via the double-shift
+  gesture / fallback shortcuts, so no Dock icon and no menu-bar icon is the
+  intended steady state, not an oversight. Turn on "Show in menu bar" for a
+  discoverable way back (left-click toggles the panel; the menu's Show/Quit
+  are the only things that actually quit the app — Cmd+Q / Dock ▸ Quit are
+  intercepted via `RunEvent::ExitRequested` with `code: None`, so the panel
   survives being "closed" the way a window with no title bar otherwise
-  couldn't recover from. Optional launch-at-login via
+  couldn't recover from) or "Show in Dock" for normal Cmd+Tab/Dock behavior;
+  both apply live, no restart needed. Optional launch-at-login via
   `tauri-plugin-autostart`.
 - **CLI capture** (`shift`): a companion binary that sends text to a running
   shiftshift instance over a local TCP port (`cli_protocol.rs`), so you can
@@ -188,18 +213,20 @@ cargo test
 ```
 
 Covers the double-Shift and triple-tap gesture state machine (`mac_tap.rs`),
-the local SQLite store CRUD and fractional reordering (`store/local.rs`,
-`store/mod.rs`), the derived copy-tracking stats (`apply_copy_stats`),
-settings/template/custom-theme persistence, Markdown export formatting, the
-notification excerpt formatting, the CLI's line-capture logic, and the S3
-backend's config validation (47 tests — the S3 backend's actual network
-calls are not covered; see `store/s3.rs`'s module doc).
+the local SQLite store CRUD, fractional reordering, and undo/redo primitives
+(`restore_item`/`set_rank`) (`store/local.rs`, `store/mod.rs`), the derived
+copy-tracking stats (`apply_copy_stats`), settings/template/custom-theme
+persistence, Markdown export formatting, the notification excerpt
+formatting, the CLI's line-capture logic, the link-preview title/favicon
+HTML scraping (`link_preview.rs`), and the S3 backend's config validation
+(59 tests — the S3 backend's actual network calls are not covered; see
+`store/s3.rs`'s module doc).
 
 Frontend logic (kind detection, template expansion, capture resolution, list
 filtering/sorting, duplicate detection, the unified `/`-suggestion-mode
-parser, theme/sort/`@`-filter suggestion matching, relative-time formatting,
-inline Markdown parsing, and custom-theme import validation) has 61 Vitest
-unit tests:
+parser, theme/sort/`@`/`#`-suggestion matching, relative-time formatting,
+inline Markdown/hashtag parsing, and custom-theme import validation) has 67
+Vitest unit tests:
 
 ```bash
 pnpm test

@@ -23,7 +23,13 @@ export type ThemeId =
 	| "rose-pine"
 	| "rose-pine-dawn"
 	| "solarized-dark"
-	| "solarized-light";
+	| "solarized-light"
+	| "glass"
+	| "neobrutalism"
+	| "paper"
+	| "win95"
+	| "raycast"
+	| "discord";
 
 export interface ThemeDef {
 	id: ThemeId;
@@ -50,6 +56,12 @@ export const THEMES: ThemeDef[] = [
 	{ id: "rose-pine-dawn", label: "Rosé Pine Dawn", mode: "light", family: "rose-pine" },
 	{ id: "solarized-dark", label: "Solarized Dark", mode: "dark", family: "solarized" },
 	{ id: "solarized-light", label: "Solarized Light", mode: "light", family: "solarized" },
+	{ id: "glass", label: "Glass", mode: "dark", family: "glass" },
+	{ id: "neobrutalism", label: "Neobrutalism", mode: "light", family: "neobrutalism" },
+	{ id: "paper", label: "Paper", mode: "light", family: "paper" },
+	{ id: "win95", label: "Windows 95", mode: "light", family: "win95" },
+	{ id: "raycast", label: "Raycast", mode: "dark", family: "raycast" },
+	{ id: "discord", label: "Discord", mode: "dark", family: "discord" },
 ];
 
 export const DEFAULT_THEME: ThemeId = "tokyo-night";

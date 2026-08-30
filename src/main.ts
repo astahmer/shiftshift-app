@@ -10,6 +10,7 @@ import {
 	isImportableTheme,
 	lastToken,
 	matchAtSuggestions,
+	matchHashSuggestions,
 	matchSlashSuggestions,
 	matchSortSuggestions,
 	matchThemeSuggestions,
@@ -29,6 +30,7 @@ import {
 	type HistoryEntry,
 	type Item,
 	type ItemKind,
+	type LinkPreview,
 	type MoveDirection,
 	type S3Settings,
 	type Settings,
@@ -75,6 +77,25 @@ settingsView.className = "settings-view";
 settingsView.hidden = true;
 app.appendChild(settingsView);
 
+const detailView = document.createElement("div");
+detailView.className = "detail-view";
+detailView.hidden = true;
+app.appendChild(detailView);
+
+const statusToast = document.createElement("div");
+statusToast.className = "status-toast";
+statusToast.hidden = true;
+app.appendChild(statusToast);
+
+let statusToastTimer: ReturnType<typeof setTimeout> | undefined;
+/** Brief, self-dismissing confirmation — used for undo/redo, since those don't otherwise give any feedback that something happened. */
+function showStatusToast(message: string): void {
+	statusToast.textContent = message;
+	statusToast.hidden = false;
+	clearTimeout(statusToastTimer);
+	statusToastTimer = setTimeout(() => (statusToast.hidden = true), 1800);
+}
+
 let items: Item[] = [];
 let filtered: Item[] = [];
 let templatesCache: Template[] = [];
@@ -89,9 +110,113 @@ let editingId: string | null = null;
 let commandSuggestions: SlashSuggestion[] = [];
 let themeSuggestions: ThemeChoice[] = [];
 let sortSuggestions: Array<{ mode: SortMode; label: string }> = [];
+let hashSuggestions: string[] = [];
 
 /** Snapshot of `settings` taken the moment a `/theme`/`/light`/`/dark`/`/sort` live preview begins — lets Escape (or navigating away) revert without persisting. */
 let previewSnapshot: Settings | null = null;
+
+/** In-memory only, keyed by URL — refetched each launch. Favicons are displayed via a plain `<img src>`, which the webview loads cross-origin fine (CORS only blocks script-readable fetches, not image display), so only the title+favicon-URL lookup needs to go through Rust. */
+const linkPreviewCache = new Map<string, LinkPreview | "loading">();
+
+/** The item currently shown in the detail view (Shift+Right), if any. */
+let detailItem: Item | null = null;
+
+/**
+ * Session-scoped (not persisted) undo/redo stacks for item mutations made
+ * through this UI. Each entry carries enough state to reverse itself
+ * exactly; `toggle_done`/`toggle_bookmarked` are self-inverse (undo == redo
+ * == "do it again"), everything else records an explicit before/after.
+ */
+type UndoEntry =
+	| { type: "add"; item: Item }
+	| { type: "delete"; item: Item }
+	| { type: "toggle_done"; id: string }
+	| { type: "toggle_bookmarked"; id: string }
+	| { type: "set_kind"; id: string; from: ItemKind; to: ItemKind }
+	| { type: "update_text"; id: string; from: string; to: string }
+	| { type: "move"; id: string; from: number; to: number };
+
+const undoStack: UndoEntry[] = [];
+const redoStack: UndoEntry[] = [];
+const UNDO_LIMIT = 100;
+
+function pushUndo(entry: UndoEntry): void {
+	undoStack.push(entry);
+	if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+	redoStack.length = 0;
+}
+
+/** Applies the reverse of `entry`, refreshes, and shows a confirmation toast. */
+async function applyUndoEntry(entry: UndoEntry): Promise<void> {
+	switch (entry.type) {
+		case "add":
+			await Store.deleteItem(entry.item.id);
+			break;
+		case "delete":
+			await Store.restoreItem(entry.item);
+			break;
+		case "toggle_done":
+			await Store.toggleDone(entry.id);
+			break;
+		case "toggle_bookmarked":
+			await Store.toggleBookmarked(entry.id);
+			break;
+		case "set_kind":
+			await Store.setKind(entry.id, entry.from);
+			break;
+		case "update_text":
+			await Store.updateItemText(entry.id, entry.from);
+			break;
+		case "move":
+			await Store.setRank(entry.id, entry.from);
+			break;
+	}
+	await refresh();
+}
+
+/** Re-applies `entry`'s original mutation (the forward direction) — used by redo. */
+async function applyRedoEntry(entry: UndoEntry): Promise<void> {
+	switch (entry.type) {
+		case "add":
+			await Store.restoreItem(entry.item);
+			break;
+		case "delete":
+			await Store.deleteItem(entry.item.id);
+			break;
+		case "toggle_done":
+			await Store.toggleDone(entry.id);
+			break;
+		case "toggle_bookmarked":
+			await Store.toggleBookmarked(entry.id);
+			break;
+		case "set_kind":
+			await Store.setKind(entry.id, entry.to);
+			break;
+		case "update_text":
+			await Store.updateItemText(entry.id, entry.to);
+			break;
+		case "move":
+			await Store.setRank(entry.id, entry.to);
+			break;
+	}
+	await refresh();
+}
+
+async function undo(): Promise<void> {
+	const entry = undoStack.pop();
+	if (!entry) return;
+	await applyUndoEntry(entry);
+	redoStack.push(entry);
+	showStatusToast("Undid last action");
+}
+
+async function redo(): Promise<void> {
+	const entry = redoStack.pop();
+	if (!entry) return;
+	await applyRedoEntry(entry);
+	undoStack.push(entry);
+	showStatusToast("Redid action");
+}
 
 function allThemeChoices(): ThemeChoice[] {
 	return [
@@ -164,6 +289,7 @@ function currentSuggestionCount(raw: string): number {
 	}
 	const partial = lastToken(raw);
 	if (partial.startsWith("@")) return matchAtSuggestions(partial).length;
+	if (partial.startsWith("#")) return matchHashSuggestions(partial, items).length;
 	return computeFiltered().length;
 }
 
@@ -222,6 +348,11 @@ function renderList(): void {
 	if (partial.startsWith("@")) {
 		filtered = [];
 		renderAtSuggestions(partial);
+		return;
+	}
+	if (partial.startsWith("#")) {
+		filtered = [];
+		renderHashSuggestions(partial);
 		return;
 	}
 	filtered = computeFiltered();
@@ -429,6 +560,44 @@ function completeAtToken(tag: string): void {
 	renderList();
 }
 
+function renderHashSuggestions(partial: string): void {
+	hashSuggestions = matchHashSuggestions(partial, items);
+	if (selected >= hashSuggestions.length) selected = hashSuggestions.length - 1;
+	list.innerHTML = "";
+	hashSuggestions.forEach((tag, i) => list.appendChild(buildHashSuggestionRow(tag, i)));
+	duplicateHint.hidden = true;
+	metaBar.hidden = true;
+}
+
+function buildHashSuggestionRow(tag: string, index: number): HTMLElement {
+	const row = document.createElement("div");
+	row.className = "item-row suggestion-row";
+	row.classList.toggle("selected", index === selected);
+	row.onclick = () => completeHashToken(tag);
+
+	const icon = document.createElement("div");
+	icon.className = "item-icon";
+	icon.textContent = "#";
+	row.appendChild(icon);
+
+	const text = document.createElement("div");
+	text.className = "item-text";
+	text.textContent = `#${tag}`;
+	row.appendChild(text);
+
+	return row;
+}
+
+/** Same idea as `completeAtToken`, for an in-progress `#partial` token. */
+function completeHashToken(tag: string): void {
+	const tokens = input.value.split(/\s+/);
+	tokens[tokens.length - 1] = `#${tag}`;
+	input.value = `${tokens.join(" ")} `;
+	selected = -1;
+	input.focus();
+	renderList();
+}
+
 /** Enter (or a click) on a highlighted theme/sort suggestion: persist what live-preview already applied, then return to the normal list. */
 async function commitHighlightedSuggestion(): Promise<void> {
 	const mode = parseSlashMode(input.value);
@@ -446,6 +615,7 @@ function buildRow(item: Item, index: number): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "item-row";
 	row.dataset.done = String(item.done);
+	row.dataset.bookmarked = String(item.bookmarked);
 	row.classList.toggle("selected", index === selected);
 	row.classList.toggle("multi-selected", multiSelected.has(item.id));
 	row.onclick = () => {
@@ -466,6 +636,8 @@ function buildRow(item: Item, index: number): HTMLElement {
 			void actOnItem(item);
 		};
 		row.appendChild(thumb);
+	} else if (item.kind === "link") {
+		row.appendChild(buildLinkContent(item));
 	} else {
 		const text = document.createElement("div");
 		text.className = "item-text";
@@ -499,6 +671,7 @@ function buildRow(item: Item, index: number): HTMLElement {
 	actions.appendChild(
 		buildActionButton("item-bookmark", "Bookmark", item.bookmarked ? "★" : "☆", "⌘B", (e) => {
 			e.stopPropagation();
+			pushUndo({ type: "toggle_bookmarked", id: item.id });
 			void Store.toggleBookmarked(item.id).then(refresh);
 		}),
 	);
@@ -508,7 +681,9 @@ function buildRow(item: Item, index: number): HTMLElement {
 		actions.appendChild(
 			buildActionButton("item-todo", isTodo ? "Remove from todos" : "Convert to todo", isTodo ? "▢" : "☑", "⌘T", (e) => {
 				e.stopPropagation();
-				void Store.setKind(item.id, isTodo ? "note" : "todo").then(refresh);
+				const to = isTodo ? "note" : "todo";
+				pushUndo({ type: "set_kind", id: item.id, from: item.kind, to });
+				void Store.setKind(item.id, to).then(refresh);
 			}),
 		);
 	}
@@ -525,6 +700,7 @@ function buildRow(item: Item, index: number): HTMLElement {
 	actions.appendChild(
 		buildActionButton("item-delete", "Delete", "🗑", "⌫", (e) => {
 			e.stopPropagation();
+			pushUndo({ type: "delete", item });
 			void Store.deleteItem(item.id).then(refresh);
 		}),
 	);
@@ -560,6 +736,7 @@ function buildIcon(item: Item): HTMLElement {
 		check.dataset.done = String(item.done);
 		check.onclick = (e) => {
 			e.stopPropagation();
+			pushUndo({ type: "toggle_done", id: item.id });
 			void Store.toggleDone(item.id).then(refresh);
 		};
 		return check;
@@ -568,6 +745,47 @@ function buildIcon(item: Item): HTMLElement {
 	icon.className = `item-icon item-icon-${item.kind}`;
 	icon.textContent = item.kind === "link" ? "↗" : item.kind === "image" ? "▧" : "●";
 	return icon;
+}
+
+/** Title + favicon once fetched (see `loadLinkPreview`), the raw URL (as a native tooltip and as the fallback label) until then. */
+function buildLinkContent(item: Item): HTMLElement {
+	const wrapper = document.createElement("div");
+	wrapper.className = "item-text link-content";
+	wrapper.title = item.text;
+	wrapper.onclick = (e) => {
+		e.stopPropagation();
+		void actOnItem(item);
+	};
+
+	const cached = linkPreviewCache.get(item.text);
+	if (cached && cached !== "loading" && cached.favicon) {
+		const favicon = document.createElement("img");
+		favicon.className = "item-favicon";
+		favicon.src = cached.favicon;
+		favicon.onerror = () => favicon.remove();
+		wrapper.appendChild(favicon);
+	}
+
+	const label = document.createElement("span");
+	label.className = "link-label";
+	label.textContent = cached && cached !== "loading" && cached.title ? cached.title : item.text;
+	wrapper.appendChild(label);
+
+	if (!cached) {
+		linkPreviewCache.set(item.text, "loading");
+		void loadLinkPreview(item.text);
+	}
+
+	return wrapper;
+}
+
+async function loadLinkPreview(url: string): Promise<void> {
+	try {
+		linkPreviewCache.set(url, await Store.fetchLinkPreview(url));
+	} catch {
+		linkPreviewCache.set(url, { title: null, favicon: null });
+	}
+	renderList();
 }
 
 function startEditing(id: string): void {
@@ -583,6 +801,7 @@ function buildEditInput(item: Item): HTMLElement {
 		const next = editInput.value.trim();
 		editingId = null;
 		if (next && next !== item.text) {
+			pushUndo({ type: "update_text", id: item.id, from: item.text, to: next });
 			await Store.updateItemText(item.id, next);
 		}
 		await refresh();
@@ -626,15 +845,139 @@ async function copyMultiSelectionAndClose(): Promise<void> {
 	await getCurrentWindow().hide();
 }
 
+function formatAbsoluteTime(iso: string): string {
+	const date = new Date(iso);
+	return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+}
+
+function buildDetailMetaRow(label: string, value: string): HTMLElement {
+	const row = document.createElement("div");
+	row.className = "detail-meta-row";
+	const labelEl = document.createElement("span");
+	labelEl.textContent = label;
+	row.appendChild(labelEl);
+	const valueEl = document.createElement("span");
+	valueEl.textContent = value;
+	row.appendChild(valueEl);
+	return row;
+}
+
+/** Full, untruncated view of a single item (Shift+Right) — dates, copy stats, and the complete rendered text, none of which fit in the compact row or meta-bar. */
+function buildDetailView(item: Item): void {
+	detailView.innerHTML = "";
+
+	if (item.kind === "image") {
+		const img = document.createElement("img");
+		img.className = "detail-image";
+		img.src = convertFileSrc(item.text);
+		detailView.appendChild(img);
+	} else {
+		const text = document.createElement("div");
+		text.className = "detail-text";
+		for (const segment of parseInlineMarkdown(item.text)) {
+			if (segment.type === "text") {
+				text.appendChild(document.createTextNode(segment.text));
+			} else {
+				const span = document.createElement("span");
+				span.className = `md-${segment.type}`;
+				span.textContent = segment.text;
+				text.appendChild(span);
+			}
+		}
+		detailView.appendChild(text);
+	}
+
+	const meta = document.createElement("div");
+	meta.className = "detail-meta";
+	meta.appendChild(buildDetailMetaRow("Content type", CONTENT_TYPE_LABELS[item.kind]));
+	if (item.source_app) meta.appendChild(buildDetailMetaRow("Source", item.source_app));
+	meta.appendChild(buildDetailMetaRow("Bookmarked", item.bookmarked ? "Yes" : "No"));
+	meta.appendChild(buildDetailMetaRow("Created", formatAbsoluteTime(item.created_at)));
+	if (item.copy_count > 0) {
+		meta.appendChild(buildDetailMetaRow("Copied", `${item.copy_count}×`));
+		if (item.first_copied_at) meta.appendChild(buildDetailMetaRow("First copied", formatAbsoluteTime(item.first_copied_at)));
+		if (item.last_copied_at) meta.appendChild(buildDetailMetaRow("Last copied", formatAbsoluteTime(item.last_copied_at)));
+	}
+	detailView.appendChild(meta);
+
+	const actions = document.createElement("div");
+	actions.className = "detail-actions";
+
+	const bookmarkBtn = document.createElement("button");
+	bookmarkBtn.textContent = item.bookmarked ? "★ Unbookmark" : "☆ Bookmark";
+	bookmarkBtn.onclick = async () => {
+		pushUndo({ type: "toggle_bookmarked", id: item.id });
+		await Store.toggleBookmarked(item.id);
+		await refresh();
+	};
+	actions.appendChild(bookmarkBtn);
+
+	if (item.kind !== "image") {
+		const isTodo = item.kind === "todo";
+		const todoBtn = document.createElement("button");
+		todoBtn.textContent = isTodo ? "Remove from todos" : "Convert to todo";
+		todoBtn.onclick = async () => {
+			const to = isTodo ? "note" : "todo";
+			pushUndo({ type: "set_kind", id: item.id, from: item.kind, to });
+			await Store.setKind(item.id, to);
+			await refresh();
+		};
+		actions.appendChild(todoBtn);
+	}
+
+	const deleteBtn = document.createElement("button");
+	deleteBtn.textContent = "Delete";
+	deleteBtn.onclick = async () => {
+		pushUndo({ type: "delete", item });
+		await Store.deleteItem(item.id);
+		closeDetail();
+		await refresh();
+	};
+	actions.appendChild(deleteBtn);
+
+	detailView.appendChild(actions);
+
+	const hint = document.createElement("div");
+	hint.className = "detail-hint";
+	hint.textContent = "⇧← or Esc to go back";
+	detailView.appendChild(hint);
+}
+
+function showDetail(item: Item): void {
+	detailItem = item;
+	buildDetailView(item);
+	detailView.hidden = false;
+	list.hidden = true;
+	metaBar.hidden = true;
+}
+
+function closeDetail(): void {
+	detailItem = null;
+	detailView.hidden = true;
+	list.hidden = false;
+	input.focus();
+	renderList();
+}
+
 async function refresh(): Promise<void> {
 	[items, templatesCache] = await Promise.all([Store.listItems(), Store.listTemplates()]);
+	if (detailItem && !detailView.hidden) {
+		const updated = items.find((i) => i.id === detailItem!.id);
+		if (updated) {
+			detailItem = updated;
+			buildDetailView(updated);
+		} else {
+			closeDetail();
+		}
+	}
 	renderList();
 }
 
 async function saveNew(raw: string): Promise<void> {
 	const templates = raw.startsWith("/") ? await Store.listTemplates() : [];
 	const { text, kind } = resolveCapture(raw, templates);
-	await Store.addItem(text, kind);
+	const item = await Store.addItem(text, kind);
+	pushUndo({ type: "add", item });
 	input.value = "";
 	selected = -1;
 	await refresh();
@@ -697,6 +1040,10 @@ document.addEventListener("keydown", async (e) => {
 			closeSettings();
 			return;
 		}
+		if (!detailView.hidden) {
+			closeDetail();
+			return;
+		}
 		await getCurrentWindow().hide();
 		return;
 	}
@@ -704,6 +1051,13 @@ document.addEventListener("keydown", async (e) => {
 	// Settings' own form controls (selects, the shortcut recorder) need native
 	// keyboard behavior; the item-list shortcuts below don't apply there.
 	if (!settingsView.hidden) return;
+	if (!detailView.hidden) {
+		if (e.shiftKey && e.key === "ArrowLeft") {
+			e.preventDefault();
+			closeDetail();
+		}
+		return;
+	}
 	// The inline edit input already handles its own keys and stops
 	// propagation, but guard anyway in case focus is elsewhere mid-edit.
 	if (editingId !== null) return;
@@ -711,8 +1065,9 @@ document.addEventListener("keydown", async (e) => {
 	const modKey = e.metaKey || e.ctrlKey;
 	const raw = input.value;
 	const slashMode = raw.startsWith("/") ? parseSlashMode(raw) : null;
-	const atPartial = !raw.startsWith("/") ? lastToken(raw) : "";
-	const inAtMode = atPartial.startsWith("@");
+	const lastWord = !raw.startsWith("/") ? lastToken(raw) : "";
+	const inAtMode = lastWord.startsWith("@");
+	const inHashMode = lastWord.startsWith("#");
 
 	if (e.key === "Tab") {
 		if (slashMode?.type === "commands") {
@@ -728,9 +1083,16 @@ document.addEventListener("keydown", async (e) => {
 		}
 		if (inAtMode) {
 			e.preventDefault();
-			const suggestions = matchAtSuggestions(atPartial);
+			const suggestions = matchAtSuggestions(lastWord);
 			const pick = selected >= 0 ? suggestions[selected] : suggestions[0];
 			if (pick) completeAtToken(pick.tag);
+			return;
+		}
+		if (inHashMode) {
+			e.preventDefault();
+			const suggestions = matchHashSuggestions(lastWord, items);
+			const pick = selected >= 0 ? suggestions[selected] : suggestions[0];
+			if (pick) completeHashToken(pick);
 			return;
 		}
 	}
@@ -742,8 +1104,11 @@ document.addEventListener("keydown", async (e) => {
 		e.preventDefault();
 		const direction: MoveDirection = e.key === "ArrowUp" ? "up" : "down";
 		const movedId = filtered[selected]!.id;
+		const fromRank = filtered[selected]!.rank;
 		await Store.moveItem(movedId, direction);
 		await refresh();
+		const movedItem = items.find((i) => i.id === movedId);
+		if (movedItem) pushUndo({ type: "move", id: movedId, from: fromRank, to: movedItem.rank });
 		// `refresh` re-renders with the stale numeric `selected`, which no
 		// longer points at the item we just moved — find where it landed so
 		// holding the key keeps moving the *same* item, not whatever else
@@ -769,18 +1134,25 @@ document.addEventListener("keydown", async (e) => {
 	}
 	if (e.key === " " && input.value === "" && selected >= 0 && filtered[selected]?.kind === "todo") {
 		e.preventDefault();
+		pushUndo({ type: "toggle_done", id: filtered[selected]!.id });
 		await Store.toggleDone(filtered[selected]!.id);
 		await refresh();
 		return;
 	}
-	if ((e.key === "Backspace" || e.key === "Delete") && input.value === "" && selected >= 0 && filtered[selected]) {
+	// Cmd+Delete/Backspace, not the bare key — an accidental bare Delete/
+	// Backspace while just browsing the list (input empty, a row focused)
+	// used to delete it outright with no confirmation.
+	if (modKey && (e.key === "Backspace" || e.key === "Delete") && input.value === "" && selected >= 0 && filtered[selected]) {
 		e.preventDefault();
-		await Store.deleteItem(filtered[selected]!.id);
+		const item = filtered[selected]!;
+		pushUndo({ type: "delete", item });
+		await Store.deleteItem(item.id);
 		await refresh();
 		return;
 	}
 	if (modKey && e.key.toLowerCase() === "b" && selected >= 0 && filtered[selected]) {
 		e.preventDefault();
+		pushUndo({ type: "toggle_bookmarked", id: filtered[selected]!.id });
 		await Store.toggleBookmarked(filtered[selected]!.id);
 		await refresh();
 		return;
@@ -793,8 +1165,26 @@ document.addEventListener("keydown", async (e) => {
 	if (modKey && e.key.toLowerCase() === "t" && selected >= 0 && filtered[selected] && filtered[selected]!.kind !== "image") {
 		e.preventDefault();
 		const current = filtered[selected]!;
-		await Store.setKind(current.id, current.kind === "todo" ? "note" : "todo");
+		const to = current.kind === "todo" ? "note" : "todo";
+		pushUndo({ type: "set_kind", id: current.id, from: current.kind, to });
+		await Store.setKind(current.id, to);
 		await refresh();
+		return;
+	}
+	if (modKey && e.key.toLowerCase() === "z" && input.value === "") {
+		e.preventDefault();
+		if (e.shiftKey) await redo();
+		else await undo();
+		return;
+	}
+	if (modKey && e.key.toLowerCase() === "c" && input.value === "" && selected >= 0 && filtered[selected]) {
+		e.preventDefault();
+		await actOnItem(filtered[selected]!);
+		return;
+	}
+	if (e.shiftKey && e.key === "ArrowRight" && input.value === "" && selected >= 0 && filtered[selected] && detailView.hidden) {
+		e.preventDefault();
+		showDetail(filtered[selected]!);
 		return;
 	}
 
@@ -814,8 +1204,15 @@ document.addEventListener("keydown", async (e) => {
 
 	if (inAtMode) {
 		e.preventDefault();
-		const suggestions = matchAtSuggestions(atPartial);
+		const suggestions = matchAtSuggestions(lastWord);
 		if (selected >= 0 && suggestions[selected]) completeAtToken(suggestions[selected]!.tag);
+		return;
+	}
+
+	if (inHashMode) {
+		e.preventDefault();
+		const suggestions = matchHashSuggestions(lastWord, items);
+		if (selected >= 0 && suggestions[selected]) completeHashToken(suggestions[selected]!);
 		return;
 	}
 
@@ -1049,6 +1446,14 @@ function buildBehaviorRows(current: Settings): HTMLElement[] {
 			(checked) => ({ clipboard_watch: checked }),
 		),
 		buildCheckboxRow("Launch at login", current.launch_at_login, false, (checked) => ({ launch_at_login: checked })),
+	];
+}
+
+/** Both default off: this app is meant to be summoned purely via the double-shift gesture / fallback shortcuts, not alt-tabbed to or clicked on. */
+function buildVisibilityRows(current: Settings): HTMLElement[] {
+	return [
+		buildCheckboxRow("Show in Dock", current.show_in_dock, false, (checked) => ({ show_in_dock: checked })),
+		buildCheckboxRow("Show in menu bar", current.show_tray_icon, false, (checked) => ({ show_tray_icon: checked })),
 	];
 }
 
@@ -1522,6 +1927,9 @@ async function openSettings(): Promise<void> {
 	settingsView.appendChild(buildCaptureModeRow(current));
 	for (const row of buildBehaviorRows(current)) settingsView.appendChild(row);
 
+	settingsView.appendChild(heading("Visibility"));
+	for (const row of buildVisibilityRows(current)) settingsView.appendChild(row);
+
 	settingsView.appendChild(heading("Double-shift bindings"));
 	settingsView.appendChild(buildBindingRow("Left Shift", "left", current));
 	settingsView.appendChild(buildBindingRow("Right Shift", "right", current));
@@ -1565,6 +1973,7 @@ async function openSettings(): Promise<void> {
 	settingsView.hidden = false;
 	list.hidden = true;
 	metaBar.hidden = true;
+	detailView.hidden = true;
 	settingsBtn.textContent = "✕";
 }
 

@@ -40,6 +40,8 @@ export interface Settings {
 	backend: "local" | "s3";
 	s3: S3Settings;
 	sort_mode: SortMode;
+	show_in_dock: boolean;
+	show_tray_icon: boolean;
 }
 
 export interface Template {
@@ -89,6 +91,11 @@ export interface CustomTheme {
 	colors: ThemeColors;
 }
 
+export interface LinkPreview {
+	title: string | null;
+	favicon: string | null;
+}
+
 /**
  * Thin RPC boundary over the Rust `Store` port (see src-tauri/src/store/mod.rs).
  * The frontend only ever talks to the active backend through these commands —
@@ -132,6 +139,16 @@ export class Store {
 		return invoke("move_item", { id, direction });
 	}
 
+	/** Undo side of a delete, redo side of an add — re-inserts a full previously-returned `Item` as-is. */
+	static restoreItem(item: Item): Promise<void> {
+		return invoke("restore_item", { item });
+	}
+
+	/** Undo/redo for `moveItem` — sets an exact rank rather than "one slot up/down". */
+	static setRank(id: string, rank: number): Promise<void> {
+		return invoke("set_rank", { id, rank });
+	}
+
 	static listHistory(limit: number): Promise<HistoryEntry[]> {
 		return invoke("list_history", { limit });
 	}
@@ -150,6 +167,10 @@ export class Store {
 
 	static copyImageToClipboard(path: string): Promise<void> {
 		return invoke("copy_image_to_clipboard", { path });
+	}
+
+	static fetchLinkPreview(url: string): Promise<LinkPreview> {
+		return invoke("fetch_link_preview", { url });
 	}
 
 	static getSettings(): Promise<Settings> {
