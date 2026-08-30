@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ThemeId } from "./themes";
 
 export type ItemKind = "note" | "todo" | "link" | "image";
 
@@ -8,6 +7,8 @@ export type Action = "capture" | "toggle_panel" | "none";
 export type CaptureMode = "silent" | "open" | "draft";
 
 export type MoveDirection = "up" | "down";
+
+export type SortMode = "manual" | "newest" | "oldest" | "az" | "za";
 
 export interface Bindings {
 	left: Action;
@@ -25,7 +26,8 @@ export interface S3Settings {
 
 export interface Settings {
 	bindings: Bindings;
-	theme: ThemeId;
+	/** A built-in `ThemeId` (see `themes.ts`) or a `CustomTheme.id` — opaque past that to Rust, just persisted verbatim. */
+	theme: string;
 	notify_on_save: boolean;
 	notify_sound: boolean;
 	fallback_toggle: string;
@@ -37,6 +39,7 @@ export interface Settings {
 	launch_at_login: boolean;
 	backend: "local" | "s3";
 	s3: S3Settings;
+	sort_mode: SortMode;
 }
 
 export interface Template {
@@ -54,6 +57,10 @@ export interface Item {
 	rank: number;
 	source_app: string | null;
 	created_at: string;
+	/** Derived from history's "used" events — see `store/mod.rs::apply_copy_stats`. */
+	copy_count: number;
+	first_copied_at: string | null;
+	last_copied_at: string | null;
 }
 
 export interface HistoryEntry {
@@ -62,6 +69,24 @@ export interface HistoryEntry {
 	action: string;
 	detail: string | null;
 	at: string;
+}
+
+/** The 7 CSS custom-property values a theme (built-in or custom) supplies — see `src/style.css`'s `[data-theme]` blocks. */
+export interface ThemeColors {
+	bg: string;
+	fg: string;
+	muted: string;
+	row_bg: string;
+	accent: string;
+	accent_fg: string;
+	border: string;
+}
+
+export interface CustomTheme {
+	id: string;
+	name: string;
+	mode: "light" | "dark";
+	colors: ThemeColors;
 }
 
 /**
@@ -153,5 +178,21 @@ export class Store {
 
 	static deleteTemplate(id: string): Promise<void> {
 		return invoke("delete_template", { id });
+	}
+
+	static listCustomThemes(): Promise<CustomTheme[]> {
+		return invoke("list_custom_themes");
+	}
+
+	static addCustomTheme(name: string, mode: "light" | "dark", colors: ThemeColors): Promise<CustomTheme> {
+		return invoke("add_custom_theme", { name, mode, colors });
+	}
+
+	static updateCustomTheme(id: string, name: string, mode: "light" | "dark", colors: ThemeColors): Promise<void> {
+		return invoke("update_custom_theme", { id, name, mode, colors });
+	}
+
+	static deleteCustomTheme(id: string): Promise<void> {
+		return invoke("delete_custom_theme", { id });
 	}
 }

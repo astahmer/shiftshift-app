@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { detectKind, expandTemplate, filterItems, findDuplicate, matchSlashSuggestions, parseUiCommand, resolveCapture } from "./capture-logic";
+import {
+	applySort,
+	detectKind,
+	expandTemplate,
+	filterItems,
+	findDuplicate,
+	formatRelativeTime,
+	isImportableTheme,
+	lastToken,
+	matchAtSuggestions,
+	matchSlashSuggestions,
+	matchSortSuggestions,
+	matchThemeSuggestions,
+	parseInlineMarkdown,
+	parseSlashMode,
+	parseUiCommand,
+	resolveCapture,
+} from "./capture-logic";
 import type { Item, Template } from "./store";
 
 function item(overrides: Partial<Item> & Pick<Item, "text">): Item {
@@ -11,6 +28,9 @@ function item(overrides: Partial<Item> & Pick<Item, "text">): Item {
 		rank: 0,
 		source_app: null,
 		created_at: "2026-01-01T00:00:00Z",
+		copy_count: 0,
+		first_copied_at: null,
+		last_copied_at: null,
 		...overrides,
 	};
 }
@@ -87,18 +107,11 @@ describe("parseUiCommand", () => {
 		expect(parseUiCommand("/settings")).toEqual({ type: "open-settings" });
 	});
 
-	it("recognizes /light and /dark", () => {
-		expect(parseUiCommand("/light")).toEqual({ type: "set-theme-mode", mode: "light" });
-		expect(parseUiCommand("/dark")).toEqual({ type: "set-theme-mode", mode: "dark" });
-	});
-
-	it("recognizes /theme <name>", () => {
-		expect(parseUiCommand("/theme dracula")).toEqual({ type: "set-theme", query: "dracula" });
-	});
-
-	it("returns null for anything else", () => {
+	it("returns null for anything else, including the now-dedicated theme/sort/history commands", () => {
 		expect(parseUiCommand("/todo buy milk")).toBeNull();
 		expect(parseUiCommand("just text")).toBeNull();
+		expect(parseUiCommand("/theme dracula")).toBeNull();
+		expect(parseUiCommand("/light")).toBeNull();
 	});
 });
 
@@ -147,12 +160,55 @@ describe("filterItems", () => {
 	});
 });
 
+describe("applySort", () => {
+	const items = [
+		item({ text: "banana", created_at: "2026-01-02T00:00:00Z" }),
+		item({ text: "apple", created_at: "2026-01-03T00:00:00Z" }),
+		item({ text: "cherry", created_at: "2026-01-01T00:00:00Z" }),
+	];
+
+	it("leaves manual order untouched", () => {
+		expect(applySort(items, "manual")).toBe(items);
+	});
+
+	it("sorts newest first by created_at", () => {
+		expect(applySort(items, "newest").map((i) => i.text)).toEqual(["apple", "banana", "cherry"]);
+	});
+
+	it("sorts oldest first by created_at", () => {
+		expect(applySort(items, "oldest").map((i) => i.text)).toEqual(["cherry", "banana", "apple"]);
+	});
+
+	it("sorts A-Z by text", () => {
+		expect(applySort(items, "az").map((i) => i.text)).toEqual(["apple", "banana", "cherry"]);
+	});
+
+	it("sorts Z-A by text", () => {
+		expect(applySort(items, "za").map((i) => i.text)).toEqual(["cherry", "banana", "apple"]);
+	});
+
+	it("keeps bookmarked items pinned above unbookmarked ones regardless of sort mode", () => {
+		const mixed = [item({ text: "zzz", bookmarked: true }), item({ text: "aaa", bookmarked: false })];
+		expect(applySort(mixed, "az").map((i) => i.text)).toEqual(["zzz", "aaa"]);
+	});
+});
+
+describe("matchSortSuggestions", () => {
+	it("returns all options for an empty query", () => {
+		expect(matchSortSuggestions("").map((o) => o.mode)).toEqual(["manual", "newest", "oldest", "az", "za"]);
+	});
+
+	it("narrows by label substring", () => {
+		expect(matchSortSuggestions("newest").map((o) => o.mode)).toEqual(["newest"]);
+	});
+});
+
 describe("matchSlashSuggestions", () => {
 	const templates: Template[] = [{ id: "1", name: "standup", body: "did: {{a}}" }];
 
 	it("matches builtins and templates by prefix", () => {
 		const names = matchSlashSuggestions("/s", templates).map((s) => s.name);
-		expect(names).toEqual(expect.arrayContaining(["settings", "standup"]));
+		expect(names).toEqual(expect.arrayContaining(["settings", "sort", "standup"]));
 		expect(names).not.toContain("todo");
 	});
 
@@ -163,10 +219,153 @@ describe("matchSlashSuggestions", () => {
 
 	it("returns everything for a bare slash", () => {
 		const names = matchSlashSuggestions("/", templates).map((s) => s.name);
-		expect(names).toEqual(expect.arrayContaining(["todo", "settings", "light", "dark", "theme", "standup"]));
+		expect(names).toEqual(expect.arrayContaining(["todo", "settings", "light", "dark", "theme", "sort", "history", "standup"]));
 	});
 
 	it("returns nothing when no command matches the prefix", () => {
 		expect(matchSlashSuggestions("/zzz", templates)).toEqual([]);
+	});
+});
+
+describe("parseSlashMode", () => {
+	it("recognizes /theme with and without a query", () => {
+		expect(parseSlashMode("/theme")).toEqual({ type: "theme", query: "" });
+		expect(parseSlashMode("/theme drac")).toEqual({ type: "theme", query: "drac" });
+	});
+
+	it("recognizes /light and /dark", () => {
+		expect(parseSlashMode("/light")).toEqual({ type: "light" });
+		expect(parseSlashMode("/dark")).toEqual({ type: "dark" });
+	});
+
+	it("recognizes /sort with and without a query", () => {
+		expect(parseSlashMode("/sort")).toEqual({ type: "sort", query: "" });
+		expect(parseSlashMode("/sort new")).toEqual({ type: "sort", query: "new" });
+	});
+
+	it("recognizes /history", () => {
+		expect(parseSlashMode("/history")).toEqual({ type: "history", query: "" });
+	});
+
+	it("does not switch modes on a partial word (e.g. /th before /theme)", () => {
+		expect(parseSlashMode("/th")).toEqual({ type: "commands" });
+	});
+
+	it("falls back to commands for anything else", () => {
+		expect(parseSlashMode("/todo buy milk")).toEqual({ type: "commands" });
+	});
+});
+
+describe("matchThemeSuggestions", () => {
+	const themes = [
+		{ id: "a", label: "Tokyo Night", mode: "dark" as const },
+		{ id: "b", label: "Tokyo Night Day", mode: "light" as const },
+		{ id: "c", label: "Dracula", mode: "dark" as const },
+	];
+
+	it("filters by label substring", () => {
+		expect(matchThemeSuggestions("tokyo", themes).map((t) => t.id)).toEqual(["a", "b"]);
+	});
+
+	it("filters by mode", () => {
+		expect(matchThemeSuggestions("", themes, "light").map((t) => t.id)).toEqual(["b"]);
+	});
+
+	it("returns everything for an empty query and no mode filter", () => {
+		expect(matchThemeSuggestions("", themes)).toEqual(themes);
+	});
+});
+
+describe("lastToken", () => {
+	it("returns the final word", () => {
+		expect(lastToken("foo @bar")).toBe("@bar");
+	});
+
+	it("returns an empty string when the input ends in whitespace", () => {
+		expect(lastToken("foo @bar ")).toBe("");
+	});
+});
+
+describe("matchAtSuggestions", () => {
+	it("matches filter tags by prefix", () => {
+		expect(matchAtSuggestions("@to").map((t) => t.tag)).toEqual(["todos"]);
+	});
+
+	it("returns everything for a bare @", () => {
+		expect(matchAtSuggestions("@").map((t) => t.tag)).toEqual(["bookmarks", "links", "todos", "notes", "images"]);
+	});
+});
+
+describe("formatRelativeTime", () => {
+	const now = new Date("2026-01-02T00:00:00Z").getTime();
+
+	it("says just now for very recent times", () => {
+		expect(formatRelativeTime("2026-01-02T00:00:00Z", now)).toBe("just now");
+	});
+
+	it("formats minutes", () => {
+		expect(formatRelativeTime("2026-01-01T23:55:00Z", now)).toBe("5m");
+	});
+
+	it("formats hours", () => {
+		expect(formatRelativeTime("2026-01-01T18:00:00Z", now)).toBe("6h");
+	});
+
+	it("formats days", () => {
+		expect(formatRelativeTime("2025-12-30T00:00:00Z", now)).toBe("3d");
+	});
+
+	it("returns an empty string for an invalid date", () => {
+		expect(formatRelativeTime("not a date", now)).toBe("");
+	});
+});
+
+describe("parseInlineMarkdown", () => {
+	it("passes plain text through as a single text segment", () => {
+		expect(parseInlineMarkdown("hello world")).toEqual([{ type: "text", text: "hello world" }]);
+	});
+
+	it("parses bold, italic, and code spans", () => {
+		expect(parseInlineMarkdown("**bold** *italic* `code`")).toEqual([
+			{ type: "bold", text: "bold" },
+			{ type: "text", text: " " },
+			{ type: "italic", text: "italic" },
+			{ type: "text", text: " " },
+			{ type: "code", text: "code" },
+		]);
+	});
+
+	it("mixes markdown spans with surrounding text", () => {
+		expect(parseInlineMarkdown("do **this** now")).toEqual([
+			{ type: "text", text: "do " },
+			{ type: "bold", text: "this" },
+			{ type: "text", text: " now" },
+		]);
+	});
+
+	it("returns a single empty text segment for empty input", () => {
+		expect(parseInlineMarkdown("")).toEqual([{ type: "text", text: "" }]);
+	});
+});
+
+describe("isImportableTheme", () => {
+	const colors = { bg: "#000", fg: "#fff", muted: "#888", row_bg: "#111", accent: "#5af", accent_fg: "#000", border: "#222" };
+
+	it("accepts a well-formed theme", () => {
+		expect(isImportableTheme({ name: "Midnight", mode: "dark", colors })).toBe(true);
+	});
+
+	it("rejects a missing color", () => {
+		const { bg: _bg, ...incomplete } = colors;
+		expect(isImportableTheme({ name: "Midnight", mode: "dark", colors: incomplete })).toBe(false);
+	});
+
+	it("rejects an invalid mode", () => {
+		expect(isImportableTheme({ name: "Midnight", mode: "blue", colors })).toBe(false);
+	});
+
+	it("rejects non-objects", () => {
+		expect(isImportableTheme(null)).toBe(false);
+		expect(isImportableTheme("not an object")).toBe(false);
 	});
 });

@@ -83,10 +83,20 @@ work.
   bindings, fallback shortcuts, notifications, sync backend, snippet
   templates, Markdown export, history. All persist to `settings.json` and
   apply live, no restart needed (except the sync backend choice).
-- **Themes**: 16 presets (Tokyo Night, Dracula, Nord, Catppuccin, Gruvbox,
-  Rosé Pine, Solarized, GitHub, VS Code, One Dark — each with a light/dark
-  sibling) — see `src/themes.ts`. Switch from Settings or via `/light`,
-  `/dark` (jumps to the current theme's light/dark sibling), `/theme <name>`.
+- **Themes**: 16 built-in presets (Tokyo Night, Dracula, Nord, Catppuccin,
+  Gruvbox, Rosé Pine, Solarized, GitHub, VS Code, One Dark — each with a
+  light/dark sibling) — see `src/themes.ts`. Switch from Settings, or type
+  `/theme` (suggests every theme, filtered as you keep typing), `/light`/
+  `/dark` (suggests just that mode's themes). Both live-preview the
+  highlighted suggestion as you arrow through it — `Enter` persists,
+  `Escape` reverts. **Custom themes** (Settings → Custom themes): pick your
+  own 7 colors with color pickers, save/edit/delete, "Use" to apply. Export
+  copies every custom theme as JSON to the clipboard; Import reads JSON back
+  from the clipboard (validated before being added) — no file picker needed,
+  so no new Tauri plugin either.
+- **Sort order**: `/sort` (or Settings → Sort order) — manual (the
+  fractional-rank order, the default), newest/oldest first, or name A→Z/Z→A.
+  Bookmarked items stay pinned above the rest regardless of mode.
 - **Native vibrancy**: the panel uses macOS `NSVisualEffectView` / Windows DWM
   acrylic (`src-tauri/src/vibrancy.rs`, ported from cooper's `glass.rs`).
 - **Capture behavior** (Settings → Capture behavior): silent (default, saves
@@ -101,15 +111,25 @@ work.
   equivalent `has:x` form, combinable with a text query e.g. `@todos ship`).
   `↑`/`↓` selects a row, `Enter` acts on it and closes the panel (copies
   note/todo text, opens a link, copies an image back to the clipboard),
-  `⌘Enter` always saves the typed text as a new item regardless of
-  selection. `Shift+Enter` adds the selected row to a multi-selection;
-  plain `Enter` with one or more selected copies them as a numbered list
-  ("1. foo\n2. bar") and closes. `Space` toggles a selected todo's done
-  state, `⌘B` bookmarks, `⌘T` converts to a todo, `⌘E` edits inline,
-  `⌥↑`/`⌥↓` reorders (unfiltered view only), `Backspace`/`Delete` (input
-  empty) deletes. `Escape` clears a pending multi-selection, then closes
-  Settings if open, then hides the panel — it does each in its own
-  keypress, never more than one at a time.
+  Typing `@` also suggests the available filter tags directly (`Tab` or
+  `Enter` on a highlighted one completes it), so you don't need to already
+  know the tag names. `↑`/`↓` selects a row, `Enter` acts on it and closes
+  the panel (copies note/todo text, opens a link, copies an image back to
+  the clipboard), `⌘Enter` always saves the typed text as a new item
+  regardless of selection. `Shift+Enter` adds the selected row to a
+  multi-selection; plain `Enter` with one or more selected copies them as a
+  numbered list ("1. foo\n2. bar") and closes. `Space` toggles a selected
+  todo's done state, `⌘B` bookmarks, `⌘T` toggles todo/not-todo, `⌘E` edits
+  inline, `⌥↑`/`⌥↓` reorders (unfiltered view only — holding it keeps
+  walking the *same* item through the list, not whatever else ends up under
+  the cursor after each step), `Backspace`/`Delete` (input empty) deletes.
+  `Escape` reverts an in-progress theme/sort preview, then clears a pending
+  multi-selection, then closes Settings if open, then hides the panel — it
+  does each in its own keypress, never more than one at a time. A subtle
+  relative-time label sits on each row (hidden in favor of the action
+  buttons on hover/select), and selecting a row shows a one-line detail
+  strip below the list — source app, content type, created-at, and copy
+  count/last-copied, Raycast-style, derived from `history`'s "used" events.
 - **Click-outside to close**: losing focus (clicking another app) hides the
   panel — opt out via Settings → "Hide when the panel loses focus".
 - **Duplicate hint**: a non-blocking inline note ("Already saved") appears
@@ -123,13 +143,21 @@ work.
   Terminal's notification permission (Tauri's dev-mode identity workaround),
   not shiftshift's — check System Settings → Notifications → Terminal if
   nothing appears in dev.
-- **History** (Settings → History): a chronological log of what was created,
-  edited, bookmarked, converted, used (copied/opened), and deleted.
+- **History**: a chronological log of what was created, edited, bookmarked,
+  converted, used (copied/opened), and deleted — both in Settings → History
+  and inline via `/history` (filter by typing after it, e.g. `/history
+  deleted`), so you don't have to leave the capture flow to check it.
 - **Snippet templates**: type `/name arg1 arg2` in the capture input to
   expand a saved template. `{{var}}` placeholders fill positionally in
   first-appearance order (a repeated `{{name}}` reuses the same arg). Manage
   templates from Settings; typing `/` shows matching commands and templates
-  as you type, `Tab` autocompletes the highlighted one.
+  as you type, `Tab` autocompletes the highlighted one — and (unlike before)
+  `Enter` on a still-partial command completes it too instead of saving the
+  partial text as a literal note.
+- **Inline Markdown in the list**: `**bold**`, `*italic*`, and `` `code` ``
+  render as such within a row's text (`capture-logic.ts`'s
+  `parseInlineMarkdown` — inline-only, no blocks/links/nesting, just enough
+  for short snippets and emphasis to stay readable in a single line).
 - **Markdown export**: writes a timestamped `.md` file (grouped by
   Todo/Note/Link/Image, todos as checkboxes, images as `![]()`) under the
   app data dir and opens it.
@@ -152,11 +180,6 @@ work.
   Build it alongside the app (`cargo build --bins` in `src-tauri`) or run it
   with `cargo run --bin shift -- some text`.
 
-### Not (yet) implemented
-
-Inline Markdown rendering in the item list (bold/italic/code within a
-row's text, cooper-style) — flagged, not attempted this pass.
-
 ## Testing
 
 ```bash
@@ -166,14 +189,17 @@ cargo test
 
 Covers the double-Shift and triple-tap gesture state machine (`mac_tap.rs`),
 the local SQLite store CRUD and fractional reordering (`store/local.rs`,
-`store/mod.rs`), settings/template persistence, Markdown export formatting,
-the notification excerpt formatting, the CLI's line-capture logic, and the
-S3 backend's config validation (44 tests — the S3 backend's actual network
+`store/mod.rs`), the derived copy-tracking stats (`apply_copy_stats`),
+settings/template/custom-theme persistence, Markdown export formatting, the
+notification excerpt formatting, the CLI's line-capture logic, and the S3
+backend's config validation (47 tests — the S3 backend's actual network
 calls are not covered; see `store/s3.rs`'s module doc).
 
 Frontend logic (kind detection, template expansion, capture resolution, list
-filtering, duplicate detection, UI slash commands and autocomplete) has
-Vitest unit tests:
+filtering/sorting, duplicate detection, the unified `/`-suggestion-mode
+parser, theme/sort/`@`-filter suggestion matching, relative-time formatting,
+inline Markdown parsing, and custom-theme import validation) has 61 Vitest
+unit tests:
 
 ```bash
 pnpm test
