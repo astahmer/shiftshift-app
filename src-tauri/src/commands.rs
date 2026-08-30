@@ -1,9 +1,9 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::capture::Bindings;
+use crate::capture;
 use crate::db::Db;
 use crate::export;
-use crate::settings::{self, SettingsState};
+use crate::settings::{self, Settings, SettingsState};
 use crate::store::{Item, ItemKind};
 use crate::templates::{self, Template, TemplatesState};
 
@@ -16,6 +16,7 @@ pub fn list_items(db: State<Db>) -> Result<Vec<Item>, String> {
 pub fn add_item(db: State<Db>, app: AppHandle, text: String, kind: ItemKind) -> Result<Item, String> {
     let item = db.0.add_item(&text, kind, None)?;
     let _ = app.emit("refresh", ());
+    crate::notify::notify_captured(&app, &item);
     Ok(item)
 }
 
@@ -27,8 +28,15 @@ pub fn toggle_done(db: State<Db>, app: AppHandle, id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn toggle_pinned(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    db.0.toggle_pinned(&id)?;
+pub fn toggle_bookmarked(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
+    db.0.toggle_bookmarked(&id)?;
+    let _ = app.emit("refresh", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_kind(db: State<Db>, app: AppHandle, id: String, kind: ItemKind) -> Result<(), String> {
+    db.0.set_kind(&id, kind)?;
     let _ = app.emit("refresh", ());
     Ok(())
 }
@@ -48,15 +56,28 @@ pub fn clear_completed(db: State<Db>, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_bindings(settings: State<SettingsState>) -> Bindings {
-    *settings.0.lock().unwrap()
+pub fn get_settings(settings: State<SettingsState>) -> Settings {
+    settings.0.lock().unwrap().clone()
 }
 
+/// Persists the whole settings object and, if the fallback shortcut
+/// accelerators changed, re-registers them immediately (new ones first, so a
+/// bad accelerator string never leaves the user with no fallback at all).
 #[tauri::command]
-pub fn set_bindings(settings: State<SettingsState>, app: AppHandle, bindings: Bindings) -> Result<(), String> {
+pub fn set_settings(settings: State<SettingsState>, app: AppHandle, next: Settings) -> Result<(), String> {
+    let previous = settings.0.lock().unwrap().clone();
+    if next.fallback_toggle != previous.fallback_toggle || next.fallback_capture != previous.fallback_capture {
+        capture::reregister_fallback_shortcuts(
+            &app,
+            &previous.fallback_toggle,
+            &previous.fallback_capture,
+            &next.fallback_toggle,
+            &next.fallback_capture,
+        )?;
+    }
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    settings::save(&app_data_dir, bindings)?;
-    *settings.0.lock().unwrap() = bindings;
+    settings::save(&app_data_dir, &next)?;
+    *settings.0.lock().unwrap() = next;
     Ok(())
 }
 

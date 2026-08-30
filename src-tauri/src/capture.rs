@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-#[cfg(not(target_os = "macos"))]
-use std::time::Instant;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -53,6 +52,55 @@ pub(crate) fn action_for(bindings: Bindings, side: Side) -> Action {
     }
 }
 
+/// What a completed gesture produced: nothing, a bound double-tap action, or
+/// (see `promote_last_capture_to_todo`) a third tap fast-following a Capture
+/// double-tap, which promotes that capture to a todo instead of running a
+/// fresh capture. Carries the double-tap's own completion time so the
+/// promotion only picks up a capture from *that* gesture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Fired {
+    Nothing,
+    Action(Action),
+    PromoteToTodo(Instant),
+}
+
+/// The most recent item created by a Capture gesture, and when. Lets a
+/// fast-following third tap (`promote_last_capture_to_todo`) retroactively
+/// flip a just-saved Note to a Todo without re-running the capture — which
+/// would both be blocked by `CAPTURING` below and needlessly re-simulate the
+/// copy chord.
+static LAST_CAPTURE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
+/// How long a promotion request still counts as "for that capture" — must
+/// comfortably exceed `do_capture`'s own worst-case latency (60ms settle +
+/// up to 14x50ms polling ~= 760ms).
+const PROMOTE_GRACE: Duration = Duration::from_millis(1500);
+
+/// Waits (off-thread, briefly) for the capture from the gesture at
+/// `gesture_at` to land, then flips its kind to Todo. A silent no-op if nothing
+/// was actually captured (no selection) within the grace window.
+pub(crate) fn promote_last_capture_to_todo(app: &AppHandle, gesture_at: Instant) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + PROMOTE_GRACE;
+        loop {
+            if let Some((id, at)) = LAST_CAPTURE.lock().unwrap().clone() {
+                if at >= gesture_at {
+                    let db = app.state::<db::Db>();
+                    if db.0.set_kind(&id, crate::store::ItemKind::Todo).is_ok() {
+                        let _ = app.emit("refresh", ());
+                    }
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    });
+}
+
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 fn run_action(app: &AppHandle, action: Action) {
     match action {
@@ -70,6 +118,7 @@ pub fn start_double_shift_listener(app: AppHandle) {
         let mut pressed: Option<(Side, Instant)> = None;
         let mut dirty = false;
         let mut last_tap: Option<(Side, Instant)> = None;
+        let mut last_double: Option<(Side, Instant, Action)> = None;
 
         let result = rdev::listen(move |event| {
             use rdev::{EventType, Key};
@@ -96,6 +145,7 @@ pub fn start_double_shift_listener(app: AppHandle) {
                     } else {
                         Side::Right
                     };
+                    let now = Instant::now();
                     let tap_ok = matches!(
                         pressed,
                         Some((s, t)) if s == side && !dirty && t.elapsed() < HOLD_LIMIT
@@ -103,17 +153,31 @@ pub fn start_double_shift_listener(app: AppHandle) {
                     pressed = None;
                     if !tap_ok {
                         last_tap = None;
+                        last_double = None;
                         return;
+                    }
+                    if let Some((prev_side, prev_at, prev_action)) = last_double {
+                        if prev_side == side && now.saturating_duration_since(prev_at) < TAP_WINDOW {
+                            last_double = None;
+                            last_tap = None;
+                            if prev_action == Action::Capture {
+                                promote_last_capture_to_todo(&app, prev_at);
+                            }
+                            return;
+                        }
                     }
                     if let Some((s, t)) = last_tap {
                         if s == side && t.elapsed() < TAP_WINDOW {
                             last_tap = None;
-                            let bindings = *app.state::<settings::SettingsState>().0.lock().unwrap();
-                            run_action(&app, action_for(bindings, side));
+                            let bindings = app.state::<settings::SettingsState>().0.lock().unwrap().bindings;
+                            let action = action_for(bindings, side);
+                            last_double = Some((side, now, action));
+                            run_action(&app, action);
                             return;
                         }
                     }
-                    last_tap = Some((side, Instant::now()));
+                    last_tap = Some((side, now));
+                    last_double = None;
                 }
                 _ => {}
             }
@@ -128,24 +192,45 @@ pub fn start_double_shift_listener(app: AppHandle) {
 
 /// Standard hotkeys for environments where the raw keyboard hook is
 /// unavailable (Wayland, denied permissions) or if the user prefers them.
-pub fn register_fallback_shortcuts(app: &AppHandle) {
+/// Accelerators are user-configurable from the settings screen (persisted as
+/// `fallback_toggle`/`fallback_capture`); see `reregister_fallback_shortcuts`
+/// for changing them at runtime.
+pub fn register_fallback_shortcuts(app: &AppHandle, toggle: &str, capture: &str) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
     let gs = app.global_shortcut();
-    if let Err(e) = gs.on_shortcut("CmdOrCtrl+Shift+Space", |app, _shortcut, event| {
+    gs.on_shortcut(toggle, |app, _shortcut, event| {
         if event.state() == ShortcutState::Pressed {
             panel::toggle(app);
         }
-    }) {
-        eprintln!("shiftshift: could not register CmdOrCtrl+Shift+Space: {e}");
-    }
-    if let Err(e) = gs.on_shortcut("CmdOrCtrl+Shift+C", |app, _shortcut, event| {
+    })
+    .map_err(|e| format!("could not register fallback toggle shortcut {toggle:?}: {e}"))?;
+    gs.on_shortcut(capture, |app, _shortcut, event| {
         if event.state() == ShortcutState::Pressed {
             capture_selection(app);
         }
-    }) {
-        eprintln!("shiftshift: could not register CmdOrCtrl+Shift+C: {e}");
-    }
+    })
+    .map_err(|e| format!("could not register fallback capture shortcut {capture:?}: {e}"))?;
+    Ok(())
+}
+
+/// Swaps the fallback shortcuts at runtime. Registers the new accelerators
+/// first and only unregisters the old ones once that succeeds, so a bad
+/// accelerator string never leaves the user with no fallback shortcuts at all.
+pub fn reregister_fallback_shortcuts(
+    app: &AppHandle,
+    old_toggle: &str,
+    old_capture: &str,
+    new_toggle: &str,
+    new_capture: &str,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    register_fallback_shortcuts(app, new_toggle, new_capture)?;
+    let gs = app.global_shortcut();
+    let _ = gs.unregister(old_toggle);
+    let _ = gs.unregister(old_capture);
+    Ok(())
 }
 
 /// Capture whatever text is selected in the foreground app by simulating the
@@ -210,9 +295,11 @@ fn restore(clip: &mut arboard::Clipboard, old: Option<String>) {
 
 fn add_text_item(app: &AppHandle, text: &str) -> Result<(), String> {
     let db = app.state::<db::Db>();
-    db.0.add_item(text, crate::store::ItemKind::Note, None)?;
+    let item = db.0.add_item(text, crate::store::ItemKind::Note, None)?;
+    *LAST_CAPTURE.lock().unwrap() = Some((item.id.clone(), Instant::now()));
     let _ = app.emit("refresh", ());
     let _ = app.emit("captured", ());
+    crate::notify::notify_captured(app, &item);
     Ok(())
 }
 

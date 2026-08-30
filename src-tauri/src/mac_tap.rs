@@ -27,7 +27,7 @@ use core_graphics::event::{
 };
 use tauri::{AppHandle, Manager};
 
-use crate::capture::{self, action_for, Action, Bindings, Side, HOLD_LIMIT, TAP_WINDOW};
+use crate::capture::{self, action_for, Action, Bindings, Fired, Side, HOLD_LIMIT, TAP_WINDOW};
 use crate::panel;
 use crate::settings::SettingsState;
 
@@ -73,13 +73,17 @@ struct State {
     pressed: Option<(Side, Instant)>,
     dirty: bool,
     last_tap: Option<(Side, Instant)>,
+    /// The side, time, and action of the double-tap that just fired, so a
+    /// fast-following third tap on the same side can be recognised as a
+    /// promote-to-todo rather than starting (or breaking) a fresh pair.
+    last_double: Option<(Side, Instant, Action)>,
 }
 
 /// Driven by flag-bit edges rather than key events, so holding both Shifts
 /// resolves correctly and state resynchronises if an event is ever missed.
 /// `now` is passed in rather than read inside so the timing rules are
 /// testable.
-fn on_flags_changed(state: &RefCell<State>, flags: u64, now: Instant, bindings: Bindings) -> Action {
+fn on_flags_changed(state: &RefCell<State>, flags: u64, now: Instant, bindings: Bindings) -> Fired {
     let mut s = state.borrow_mut();
     let changed = flags ^ s.prev_flags;
     s.prev_flags = flags;
@@ -87,9 +91,10 @@ fn on_flags_changed(state: &RefCell<State>, flags: u64, now: Instant, bindings: 
     if changed & !COMPANION_BITS != 0 {
         s.dirty = true;
         s.last_tap = None;
+        s.last_double = None;
     }
 
-    let mut action = Action::None;
+    let mut fired = Fired::Nothing;
     for &(bit, side) in &[
         (NX_DEVICELSHIFTKEYMASK, Side::Left),
         (NX_DEVICERSHIFTKEYMASK, Side::Right),
@@ -111,24 +116,38 @@ fn on_flags_changed(state: &RefCell<State>, flags: u64, now: Instant, bindings: 
         s.pressed = None;
         if !tapped {
             s.last_tap = None;
+            s.last_double = None;
             continue;
         }
+
+        if let Some((prev_side, prev_at, prev_action)) = s.last_double {
+            if prev_side == side && now.saturating_duration_since(prev_at) < TAP_WINDOW {
+                s.last_double = None;
+                s.last_tap = None;
+                fired = if prev_action == Action::Capture { Fired::PromoteToTodo(prev_at) } else { Fired::Nothing };
+                continue;
+            }
+        }
+
         let is_double = matches!(
             s.last_tap,
             Some((prev, at)) if prev == side && now.saturating_duration_since(at) < TAP_WINDOW
         );
         if is_double {
             s.last_tap = None;
-            action = action_for(bindings, side);
+            let action = action_for(bindings, side);
+            s.last_double = Some((side, now, action));
+            fired = Fired::Action(action);
         } else {
             s.last_tap = Some((side, now));
+            s.last_double = None;
         }
     }
-    action
+    fired
 }
 
 fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
-    let state = RefCell::new(State { prev_flags: 0, pressed: None, dirty: false, last_tap: None });
+    let state = RefCell::new(State { prev_flags: 0, pressed: None, dirty: false, last_tap: None, last_double: None });
     let port: Arc<AtomicPtr<c_void>> = Arc::new(AtomicPtr::new(ptr::null_mut()));
     let port_cb = Arc::clone(&port);
     let app_cb = app.clone();
@@ -152,11 +171,14 @@ fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
                     s.last_tap = None;
                 }
                 CGEventType::FlagsChanged => {
-                    let bindings = *app_cb.state::<SettingsState>().0.lock().unwrap();
+                    let bindings = app_cb.state::<SettingsState>().0.lock().unwrap().bindings;
                     match on_flags_changed(&state, event.get_flags().bits(), Instant::now(), bindings) {
-                        Action::Capture => capture::capture_selection(&app_cb),
-                        Action::TogglePanel => panel::toggle(&app_cb),
-                        Action::None => {}
+                        Fired::Action(Action::Capture) => capture::capture_selection(&app_cb),
+                        Fired::Action(Action::TogglePanel) => panel::toggle(&app_cb),
+                        Fired::Action(Action::None) | Fired::Nothing => {}
+                        Fired::PromoteToTodo(gesture_at) => {
+                            capture::promote_last_capture_to_todo(&app_cb, gesture_at)
+                        }
                     }
                 }
                 _ => {}
@@ -215,7 +237,7 @@ mod tests {
     const R: u64 = NX_DEVICERSHIFTKEYMASK;
 
     fn state() -> RefCell<State> {
-        RefCell::new(State { prev_flags: 0, pressed: None, dirty: false, last_tap: None })
+        RefCell::new(State { prev_flags: 0, pressed: None, dirty: false, last_tap: None, last_double: None })
     }
 
     fn ms(n: u64) -> Duration {
@@ -230,9 +252,9 @@ mod tests {
         }
     }
 
-    fn feed(st: &RefCell<State>, base: Instant, steps: &[(u64, u64)]) -> Action {
+    fn feed(st: &RefCell<State>, base: Instant, steps: &[(u64, u64)]) -> Fired {
         let bindings = Bindings::default();
-        let mut last = Action::None;
+        let mut last = Fired::Nothing;
         for &(held, at) in steps {
             last = on_flags_changed(st, flags(held), base + ms(at), bindings);
         }
@@ -243,48 +265,86 @@ mod tests {
     fn left_double_tap_captures() {
         let (st, t0) = (state(), Instant::now());
         let a = feed(&st, t0, &[(L, 0), (0, 50), (L, 100), (0, 150)]);
-        assert_eq!(a, Action::Capture);
+        assert_eq!(a, Fired::Action(Action::Capture));
     }
 
     #[test]
     fn right_double_tap_toggles() {
         let (st, t0) = (state(), Instant::now());
         let a = feed(&st, t0, &[(R, 0), (0, 50), (R, 100), (0, 150)]);
-        assert_eq!(a, Action::TogglePanel);
+        assert_eq!(a, Fired::Action(Action::TogglePanel));
     }
 
     #[test]
     fn single_tap_does_nothing() {
         let (st, t0) = (state(), Instant::now());
         let a = feed(&st, t0, &[(L, 0), (0, 50)]);
-        assert_eq!(a, Action::None);
+        assert_eq!(a, Fired::Nothing);
     }
 
     #[test]
     fn second_tap_after_the_window_does_not_fire() {
         let (st, t0) = (state(), Instant::now());
         let a = feed(&st, t0, &[(L, 0), (0, 50), (L, 100), (0, 500)]);
-        assert_eq!(a, Action::None);
+        assert_eq!(a, Fired::Nothing);
     }
 
     #[test]
     fn holding_shift_too_long_is_not_a_tap() {
         let (st, t0) = (state(), Instant::now());
         let a = feed(&st, t0, &[(L, 0), (0, 600), (L, 700), (0, 1300)]);
-        assert_eq!(a, Action::None);
+        assert_eq!(a, Fired::Nothing);
     }
 
     #[test]
     fn the_two_sides_do_not_combine() {
         let (st, t0) = (state(), Instant::now());
         let a = feed(&st, t0, &[(L, 0), (0, 50), (R, 100), (0, 150)]);
-        assert_eq!(a, Action::None);
+        assert_eq!(a, Fired::Nothing);
     }
 
     #[test]
     fn holding_both_shifts_fires_nothing() {
         let (st, t0) = (state(), Instant::now());
         let a = feed(&st, t0, &[(L, 0), (L | R, 20), (R, 40), (0, 60)]);
-        assert_eq!(a, Action::None);
+        assert_eq!(a, Fired::Nothing);
+    }
+
+    #[test]
+    fn triple_tap_on_the_capture_side_promotes_to_todo() {
+        let (st, t0) = (state(), Instant::now());
+        // Left is bound to Capture by default: tap, tap (fires Capture), tap
+        // (promotes) — each release within TAP_WINDOW of the previous.
+        let a = feed(&st, t0, &[(L, 0), (0, 50), (L, 100), (0, 150), (L, 200), (0, 250)]);
+        assert_eq!(a, Fired::PromoteToTodo(t0 + ms(150)));
+    }
+
+    #[test]
+    fn triple_tap_on_the_toggle_panel_side_does_nothing_extra() {
+        let (st, t0) = (state(), Instant::now());
+        // Right is bound to TogglePanel by default — nothing to promote.
+        let a = feed(&st, t0, &[(R, 0), (0, 50), (R, 100), (0, 150), (R, 200), (0, 250)]);
+        assert_eq!(a, Fired::Nothing);
+    }
+
+    #[test]
+    fn a_fourth_tap_after_a_promotion_starts_a_fresh_pair() {
+        let (st, t0) = (state(), Instant::now());
+        // Triple-tap promotes at 250ms, then a lone fourth tap must not
+        // itself fire anything — it only arms a new potential double.
+        let a = feed(
+            &st,
+            t0,
+            &[(L, 0), (0, 50), (L, 100), (0, 150), (L, 200), (0, 250), (L, 300), (0, 350)],
+        );
+        assert_eq!(a, Fired::Nothing);
+    }
+
+    #[test]
+    fn a_third_tap_outside_the_window_does_not_promote() {
+        let (st, t0) = (state(), Instant::now());
+        // Third release lands 450ms after the double fired, past TAP_WINDOW.
+        let a = feed(&st, t0, &[(L, 0), (0, 50), (L, 100), (0, 150), (L, 550), (0, 600)]);
+        assert_eq!(a, Fired::Nothing);
     }
 }

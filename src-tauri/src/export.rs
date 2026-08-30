@@ -38,7 +38,7 @@ mod tests {
             kind,
             text: text.into(),
             done,
-            pinned: false,
+            bookmarked: false,
             rank: 0.0,
             source_app: None,
             created_at: "2026-01-01T00:00:00Z".into(),

@@ -27,8 +27,9 @@ pub fn start(app: AppHandle) {
             std::thread::spawn(move || {
                 let db = app.state::<Db>();
                 for line in BufReader::new(stream).lines().map_while(Result::ok) {
-                    if add_line(&db, &line) {
+                    if let Some(item) = add_line(&db, &line) {
                         let _ = app.emit("refresh", ());
+                        crate::notify::notify_captured(&app, &item);
                     }
                 }
             });
@@ -36,15 +37,14 @@ pub fn start(app: AppHandle) {
     });
 }
 
-/// Adds one line of CLI input as a Note, skipping blank lines. Returns
-/// whether an item was actually added, so callers know whether a refresh
-/// event is warranted.
-fn add_line(db: &Db, line: &str) -> bool {
+/// Adds one line of CLI input as a Note, skipping blank lines. Returns the
+/// added item, so callers know whether a refresh/notification is warranted.
+fn add_line(db: &Db, line: &str) -> Option<crate::store::Item> {
     let text = line.trim();
     if text.is_empty() {
-        return false;
+        return None;
     }
-    db.0.add_item(text, ItemKind::Note, Some("cli".to_string())).is_ok()
+    db.0.add_item(text, ItemKind::Note, Some("cli".to_string())).ok()
 }
 
 #[cfg(test)]
@@ -61,18 +61,17 @@ mod tests {
     #[test]
     fn adds_a_non_blank_line_as_a_cli_sourced_note() {
         let db = db();
-        assert!(add_line(&db, "buy milk"));
-        let items = db.0.list_items().unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].text, "buy milk");
-        assert_eq!(items[0].kind, ItemKind::Note);
-        assert_eq!(items[0].source_app.as_deref(), Some("cli"));
+        let item = add_line(&db, "buy milk").expect("should add an item");
+        assert_eq!(item.text, "buy milk");
+        assert_eq!(item.kind, ItemKind::Note);
+        assert_eq!(item.source_app.as_deref(), Some("cli"));
+        assert_eq!(db.0.list_items().unwrap().len(), 1);
     }
 
     #[test]
     fn skips_a_blank_line() {
         let db = db();
-        assert!(!add_line(&db, "   "));
+        assert!(add_line(&db, "   ").is_none());
         assert!(db.0.list_items().unwrap().is_empty());
     }
 }

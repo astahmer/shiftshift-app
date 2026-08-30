@@ -37,7 +37,10 @@ pub struct Item {
     pub kind: ItemKind,
     pub text: String,
     pub done: bool,
-    pub pinned: bool,
+    /// Sorts above everything else and is what the `@bookmarks` filter
+    /// matches on (renamed from `pinned` — one flag, not two, matching how
+    /// both reference apps only have a single such concept).
+    pub bookmarked: bool,
     pub rank: f64,
     pub source_app: Option<String>,
     pub created_at: String,
@@ -51,7 +54,8 @@ pub trait Store: Send + Sync {
     fn list_items(&self) -> Result<Vec<Item>, String>;
     fn add_item(&self, text: &str, kind: ItemKind, source_app: Option<String>) -> Result<Item, String>;
     fn toggle_done(&self, id: &str) -> Result<(), String>;
-    fn toggle_pinned(&self, id: &str) -> Result<(), String>;
+    fn toggle_bookmarked(&self, id: &str) -> Result<(), String>;
+    fn set_kind(&self, id: &str, kind: ItemKind) -> Result<(), String>;
     fn delete_item(&self, id: &str) -> Result<(), String>;
     fn clear_completed(&self) -> Result<(), String>;
 }

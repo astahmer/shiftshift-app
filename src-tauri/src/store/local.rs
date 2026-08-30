@@ -17,14 +17,33 @@ impl LocalSqliteStore {
                 kind TEXT NOT NULL,
                 text TEXT NOT NULL,
                 done INTEGER NOT NULL DEFAULT 0,
-                pinned INTEGER NOT NULL DEFAULT 0,
+                bookmarked INTEGER NOT NULL DEFAULT 0,
                 rank REAL NOT NULL DEFAULT 0,
                 source_app TEXT,
                 created_at TEXT NOT NULL
             );",
         )
         .map_err(|e| e.to_string())?;
+        Self::migrate_pinned_to_bookmarked(&conn)?;
         Ok(Self { conn: Mutex::new(conn) })
+    }
+
+    /// One-off migration for databases created before `pinned` was renamed to
+    /// `bookmarked`. `CREATE TABLE IF NOT EXISTS` above is a no-op against an
+    /// existing table, so an old column would otherwise linger and every
+    /// query referencing `bookmarked` would fail against it.
+    fn migrate_pinned_to_bookmarked(conn: &Connection) -> Result<(), String> {
+        let has_old_column: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('items') WHERE name = 'pinned'")
+            .map_err(|e| e.to_string())?
+            .query_row([], |row| row.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?
+            > 0;
+        if has_old_column {
+            conn.execute_batch("ALTER TABLE items RENAME COLUMN pinned TO bookmarked;")
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<Item> {
@@ -38,7 +57,7 @@ impl LocalSqliteStore {
             },
             text: row.get("text")?,
             done: row.get::<_, i64>("done")? != 0,
-            pinned: row.get::<_, i64>("pinned")? != 0,
+            bookmarked: row.get::<_, i64>("bookmarked")? != 0,
             rank: row.get("rank")?,
             source_app: row.get("source_app")?,
             created_at: row.get("created_at")?,
@@ -58,7 +77,7 @@ impl Store for LocalSqliteStore {
     fn list_items(&self) -> Result<Vec<Item>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare("SELECT * FROM items ORDER BY pinned DESC, rank DESC, created_at DESC")
+            .prepare("SELECT * FROM items ORDER BY bookmarked DESC, rank DESC, created_at DESC")
             .map_err(|e| e.to_string())?;
         let items = stmt
             .query_map([], Self::row_to_item)
@@ -74,14 +93,14 @@ impl Store for LocalSqliteStore {
             kind,
             text: text.to_string(),
             done: false,
-            pinned: false,
+            bookmarked: false,
             rank: chrono::Utc::now().timestamp_millis() as f64,
             source_app,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO items (id, kind, text, done, pinned, rank, source_app, created_at)
+            "INSERT INTO items (id, kind, text, done, bookmarked, rank, source_app, created_at)
              VALUES (?1, ?2, ?3, 0, 0, ?4, ?5, ?6)",
             params![
                 item.id,
@@ -103,9 +122,16 @@ impl Store for LocalSqliteStore {
         Ok(())
     }
 
-    fn toggle_pinned(&self, id: &str) -> Result<(), String> {
+    fn toggle_bookmarked(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute("UPDATE items SET pinned = NOT pinned WHERE id = ?1", params![id])
+        conn.execute("UPDATE items SET bookmarked = NOT bookmarked WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn set_kind(&self, id: &str, kind: ItemKind) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("UPDATE items SET kind = ?1 WHERE id = ?2", params![kind_str(kind), id])
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -155,13 +181,38 @@ mod tests {
     }
 
     #[test]
-    fn pinned_items_sort_before_unpinned() {
+    fn bookmarked_items_sort_before_unbookmarked() {
         let s = store();
         let a = s.add_item("first", ItemKind::Note, None).unwrap();
         let _b = s.add_item("second", ItemKind::Note, None).unwrap();
-        s.toggle_pinned(&a.id).unwrap();
+        s.toggle_bookmarked(&a.id).unwrap();
         let items = s.list_items().unwrap();
         assert_eq!(items[0].id, a.id);
+    }
+
+    #[test]
+    fn set_kind_changes_an_items_kind() {
+        let s = store();
+        let item = s.add_item("call mom", ItemKind::Note, None).unwrap();
+        s.set_kind(&item.id, ItemKind::Todo).unwrap();
+        assert_eq!(s.list_items().unwrap()[0].kind, ItemKind::Todo);
+    }
+
+    #[test]
+    fn migrates_a_legacy_pinned_column_to_bookmarked() {
+        let conn = rusqlite::Connection::open(std::path::Path::new(":memory:")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (
+                id TEXT PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL,
+                done INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
+                rank REAL NOT NULL DEFAULT 0, source_app TEXT, created_at TEXT NOT NULL
+            );
+            INSERT INTO items VALUES ('id-1', 'note', 'legacy row', 0, 1, 0.0, NULL, '2026-01-01T00:00:00Z');",
+        )
+        .unwrap();
+        LocalSqliteStore::migrate_pinned_to_bookmarked(&conn).unwrap();
+        let bookmarked: i64 = conn.query_row("SELECT bookmarked FROM items WHERE id = 'id-1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(bookmarked, 1);
     }
 
     #[test]
