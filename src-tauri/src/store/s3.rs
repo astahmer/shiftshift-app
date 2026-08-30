@@ -81,6 +81,8 @@ impl Store for S3Store {
         items.sort_by(|a, b| {
             b.bookmarked.cmp(&a.bookmarked).then(b.rank.total_cmp(&a.rank)).then(b.created_at.cmp(&a.created_at))
         });
+        let history = self.list_history(u32::MAX)?;
+        super::apply_copy_stats(&mut items, &history);
         Ok(items)
     }
 
@@ -95,6 +97,9 @@ impl Store for S3Store {
             rank: max_rank + 1000.0,
             source_app,
             created_at: chrono::Utc::now().to_rfc3339(),
+            copy_count: 0,
+            first_copied_at: None,
+            last_copied_at: None,
         };
         self.put_item(&item)?;
         Ok(item)

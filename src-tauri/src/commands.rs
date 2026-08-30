@@ -2,6 +2,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::capture;
+use crate::custom_themes::{self, CustomTheme, CustomThemesState, ThemeColors};
 use crate::db::Db;
 use crate::export;
 use crate::settings::{self, Settings, SettingsState};
@@ -192,4 +193,53 @@ pub fn delete_template(templates: State<TemplatesState>, app: AppHandle, id: Str
 fn persist_templates(app: &AppHandle, templates: &[Template]) -> Result<(), String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     templates::save(&app_data_dir, templates)
+}
+
+#[tauri::command]
+pub fn list_custom_themes(themes: State<CustomThemesState>) -> Vec<CustomTheme> {
+    themes.0.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn add_custom_theme(
+    themes: State<CustomThemesState>,
+    app: AppHandle,
+    name: String,
+    mode: String,
+    colors: ThemeColors,
+) -> Result<CustomTheme, String> {
+    let theme = CustomTheme { id: uuid::Uuid::new_v4().to_string(), name, mode, colors };
+    let mut list = themes.0.lock().unwrap();
+    list.push(theme.clone());
+    persist_custom_themes(&app, &list)?;
+    Ok(theme)
+}
+
+#[tauri::command]
+pub fn update_custom_theme(
+    themes: State<CustomThemesState>,
+    app: AppHandle,
+    id: String,
+    name: String,
+    mode: String,
+    colors: ThemeColors,
+) -> Result<(), String> {
+    let mut list = themes.0.lock().unwrap();
+    let theme = list.iter_mut().find(|t| t.id == id).ok_or("theme not found")?;
+    theme.name = name;
+    theme.mode = mode;
+    theme.colors = colors;
+    persist_custom_themes(&app, &list)
+}
+
+#[tauri::command]
+pub fn delete_custom_theme(themes: State<CustomThemesState>, app: AppHandle, id: String) -> Result<(), String> {
+    let mut list = themes.0.lock().unwrap();
+    list.retain(|t| t.id != id);
+    persist_custom_themes(&app, &list)
+}
+
+fn persist_custom_themes(app: &AppHandle, themes: &[CustomTheme]) -> Result<(), String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    custom_themes::save(&app_data_dir, themes)
 }

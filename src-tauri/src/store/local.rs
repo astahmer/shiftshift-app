@@ -69,6 +69,11 @@ impl LocalSqliteStore {
             rank: row.get("rank")?,
             source_app: row.get("source_app")?,
             created_at: row.get("created_at")?,
+            // Not stored columns — recomputed from history right after this
+            // query returns, see `list_items`.
+            copy_count: 0,
+            first_copied_at: None,
+            last_copied_at: None,
         })
     }
 }
@@ -84,20 +89,25 @@ fn kind_str(kind: ItemKind) -> &'static str {
 
 impl Store for LocalSqliteStore {
     fn list_items(&self) -> Result<Vec<Item>, String> {
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn
-            // rowid as the final tiebreaker: rank/created_at are both
-            // millisecond-resolution timestamps and can tie for items
-            // inserted in rapid succession (a fast test, or several CLI
-            // lines piped in one call), which would otherwise make sort
-            // order nondeterministic between runs.
-            .prepare("SELECT * FROM items ORDER BY bookmarked DESC, rank DESC, created_at DESC, rowid DESC")
-            .map_err(|e| e.to_string())?;
-        let items = stmt
-            .query_map([], Self::row_to_item)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+        let mut items = {
+            let conn = self.conn.lock().map_err(|e| e.to_string())?;
+            let mut stmt = conn
+                // rowid as the final tiebreaker: rank/created_at are both
+                // millisecond-resolution timestamps and can tie for items
+                // inserted in rapid succession (a fast test, or several CLI
+                // lines piped in one call), which would otherwise make sort
+                // order nondeterministic between runs.
+                .prepare("SELECT * FROM items ORDER BY bookmarked DESC, rank DESC, created_at DESC, rowid DESC")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], Self::row_to_item)
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            rows
+        }; // lock released here — list_history below takes it again
+        let history = self.list_history(u32::MAX)?;
+        super::apply_copy_stats(&mut items, &history);
         Ok(items)
     }
 
@@ -120,6 +130,9 @@ impl Store for LocalSqliteStore {
             rank: max_rank + 1000.0,
             source_app,
             created_at: chrono::Utc::now().to_rfc3339(),
+            copy_count: 0,
+            first_copied_at: None,
+            last_copied_at: None,
         };
         conn.execute(
             "INSERT INTO items (id, kind, text, done, bookmarked, rank, source_app, created_at)

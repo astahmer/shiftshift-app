@@ -56,6 +56,11 @@ pub struct Settings {
     /// Switching requires a restart (no live backend hot-swap).
     pub backend: String,
     pub s3: S3Settings,
+    /// Opaque to Rust, like `theme` — the frontend applies this client-side
+    /// (`capture-logic.ts`'s `applySort`) rather than re-querying the store,
+    /// since the canonical DB order already IS "manual" (rank-based).
+    /// "manual" | "newest" | "oldest" | "az" | "za".
+    pub sort_mode: String,
 }
 
 impl Default for Settings {
@@ -74,6 +79,7 @@ impl Default for Settings {
             launch_at_login: false,
             backend: "local".to_string(),
             s3: S3Settings::default(),
+            sort_mode: "manual".to_string(),
         }
     }
 }

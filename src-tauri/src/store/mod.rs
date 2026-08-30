@@ -68,6 +68,41 @@ pub struct Item {
     pub rank: f64,
     pub source_app: Option<String>,
     pub created_at: String,
+    /// Derived from `history`'s "used" events, not a stored fact about the
+    /// item — recomputed by `apply_copy_stats` on every `list_items` call
+    /// rather than kept in sync by every mutation. Whatever value ends up
+    /// persisted to disk in between (e.g. via `S3Store::put_item`) is
+    /// harmless leftover, since it's always overwritten before being read.
+    #[serde(default)]
+    pub copy_count: i64,
+    #[serde(default)]
+    pub first_copied_at: Option<String>,
+    #[serde(default)]
+    pub last_copied_at: Option<String>,
+}
+
+/// Recomputes each item's copy-tracking fields (Raycard-style "times copied /
+/// first copied / last copied") from the "used" events in `history` — the
+/// single source of truth, so no mutation path needs to remember to keep a
+/// separate counter in sync.
+pub fn apply_copy_stats(items: &mut [Item], history: &[HistoryEntry]) {
+    for item in items.iter_mut() {
+        let mut count = 0i64;
+        let mut first: Option<&str> = None;
+        let mut last: Option<&str> = None;
+        for entry in history.iter().filter(|h| h.action == "used" && h.item_id.as_deref() == Some(item.id.as_str())) {
+            count += 1;
+            if first.is_none_or(|f| entry.at.as_str() < f) {
+                first = Some(entry.at.as_str());
+            }
+            if last.is_none_or(|l| entry.at.as_str() > l) {
+                last = Some(entry.at.as_str());
+            }
+        }
+        item.copy_count = count;
+        item.first_copied_at = first.map(|s| s.to_string());
+        item.last_copied_at = last.map(|s| s.to_string());
+    }
 }
 
 /// Fractional-rank reordering (shiftshift's `computeMoveRank`, mirrored for
@@ -129,7 +164,27 @@ mod tests {
             rank,
             source_app: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
+            copy_count: 0,
+            first_copied_at: None,
+            last_copied_at: None,
         }
+    }
+
+    #[test]
+    fn apply_copy_stats_counts_used_events_and_tracks_first_and_last() {
+        let mut items = vec![item("a", 1.0), item("b", 2.0)];
+        let history = vec![
+            HistoryEntry { id: "1".into(), item_id: Some("a".into()), action: "used".into(), detail: None, at: "2026-01-01T00:00:00Z".into() },
+            HistoryEntry { id: "2".into(), item_id: Some("a".into()), action: "used".into(), detail: None, at: "2026-01-03T00:00:00Z".into() },
+            HistoryEntry { id: "3".into(), item_id: Some("a".into()), action: "used".into(), detail: None, at: "2026-01-02T00:00:00Z".into() },
+            HistoryEntry { id: "4".into(), item_id: Some("b".into()), action: "created".into(), detail: None, at: "2026-01-01T00:00:00Z".into() },
+        ];
+        apply_copy_stats(&mut items, &history);
+        assert_eq!(items[0].copy_count, 3);
+        assert_eq!(items[0].first_copied_at.as_deref(), Some("2026-01-01T00:00:00Z"));
+        assert_eq!(items[0].last_copied_at.as_deref(), Some("2026-01-03T00:00:00Z"));
+        assert_eq!(items[1].copy_count, 0);
+        assert_eq!(items[1].first_copied_at, None);
     }
 
     #[test]

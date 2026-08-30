@@ -3,6 +3,7 @@ mod clipboard_watch;
 pub mod cli_protocol;
 mod cli_server;
 mod commands;
+mod custom_themes;
 mod db;
 mod export;
 mod images;
@@ -44,6 +45,9 @@ pub fn run() {
 
             let templates = templates::load(&app_data_dir);
             app.manage(templates::TemplatesState(std::sync::Mutex::new(templates)));
+
+            let custom_themes = custom_themes::load(&app_data_dir);
+            app.manage(custom_themes::CustomThemesState(std::sync::Mutex::new(custom_themes)));
 
             let handle = app.handle().clone();
             if let Err(e) = capture::register_fallback_shortcuts(&handle, &fallback_toggle, &fallback_capture, &fallback_image) {
@@ -93,6 +97,10 @@ pub fn run() {
             commands::add_template,
             commands::update_template,
             commands::delete_template,
+            commands::list_custom_themes,
+            commands::add_custom_theme,
+            commands::update_custom_theme,
+            commands::delete_custom_theme,
         ])
         .build(tauri::generate_context!())
         .expect("error while building shiftshift")

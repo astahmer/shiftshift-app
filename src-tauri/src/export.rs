@@ -44,6 +44,9 @@ mod tests {
             rank: 0.0,
             source_app: None,
             created_at: "2026-01-01T00:00:00Z".into(),
+            copy_count: 0,
+            first_copied_at: None,
+            last_copied_at: None,
         }
     }
 
