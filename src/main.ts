@@ -329,6 +329,11 @@ function isPreviewMode(mode: ReturnType<typeof parseSlashMode> | null): boolean 
 	return mode !== null && (mode.type === "theme" || mode.type === "light" || mode.type === "dark" || mode.type === "sort");
 }
 
+/** Keeps the keyboard-highlighted row in view — without this, arrowing past the visible edge of the scrollable list moves the selection but leaves it invisible above/below the fold. */
+function scrollSelectedIntoView(): void {
+	list.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+}
+
 function renderList(): void {
 	const raw = input.value;
 	const mode = raw.startsWith("/") ? parseSlashMode(raw) : null;
@@ -342,17 +347,20 @@ function renderList(): void {
 		// fire against it while browsing command suggestions instead.
 		filtered = [];
 		renderSlashSuggestions(raw);
+		scrollSelectedIntoView();
 		return;
 	}
 	const partial = lastToken(raw);
 	if (partial.startsWith("@")) {
 		filtered = [];
 		renderAtSuggestions(partial);
+		scrollSelectedIntoView();
 		return;
 	}
 	if (partial.startsWith("#")) {
 		filtered = [];
 		renderHashSuggestions(partial);
+		scrollSelectedIntoView();
 		return;
 	}
 	filtered = computeFiltered();
@@ -363,6 +371,7 @@ function renderList(): void {
 	});
 	updateHint();
 	updateMetaBar();
+	scrollSelectedIntoView();
 }
 
 function renderSlashSuggestions(raw: string): void {
@@ -1118,17 +1127,20 @@ document.addEventListener("keydown", async (e) => {
 		renderList();
 		return;
 	}
+	// Wraps at both ends (last -> first going down, first -> last going up)
+	// rather than clamping, so cycling through a short list doesn't require
+	// backtracking once you overshoot an end.
 	if (e.key === "ArrowDown") {
 		e.preventDefault();
 		const count = currentSuggestionCount(raw);
-		if (count > 0) selected = Math.min(selected + 1, count - 1);
+		if (count > 0) selected = selected < 0 ? 0 : (selected + 1) % count;
 		renderList();
 		return;
 	}
 	if (e.key === "ArrowUp") {
 		e.preventDefault();
 		const count = currentSuggestionCount(raw);
-		if (count > 0) selected = Math.max(selected - 1, 0);
+		if (count > 0) selected = selected < 0 ? count - 1 : (selected - 1 + count) % count;
 		renderList();
 		return;
 	}
