@@ -37,11 +37,14 @@ export interface Settings {
 	hide_on_blur: boolean;
 	clipboard_watch: boolean;
 	launch_at_login: boolean;
-	backend: "local" | "s3";
+	backend: "local" | "s3" | "folder";
 	s3: S3Settings;
 	sort_mode: SortMode;
 	show_in_dock: boolean;
 	show_tray_icon: boolean;
+	folder_path: string;
+	/** Overrides the active theme's own background opacity when > 0; 0 means "use the theme's default". */
+	panel_opacity: number;
 }
 
 export interface Template {
@@ -161,7 +164,7 @@ export class Store {
 		return invoke("note_own_clipboard_write", { text });
 	}
 
-	static captureClipboardImage(): Promise<void> {
+	static captureClipboardImage(): Promise<Item> {
 		return invoke("capture_clipboard_image");
 	}
 

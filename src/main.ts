@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-shell";
 import {
 	applySort,
+	extractTags,
 	filterItems,
 	findDuplicate,
 	formatRelativeTime,
@@ -120,6 +121,8 @@ const linkPreviewCache = new Map<string, LinkPreview | "loading">();
 
 /** The item currently shown in the detail view (Shift+Right), if any. */
 let detailItem: Item | null = null;
+/** Id of the item currently being edited in the detail view's textarea, if any. */
+let detailEditingId: string | null = null;
 
 /**
  * Session-scoped (not persisted) undo/redo stacks for item mutations made
@@ -238,12 +241,20 @@ function applyTheme(themeId: string): void {
 		root.style.setProperty("--accent", custom.colors.accent);
 		root.style.setProperty("--accent-fg", custom.colors.accent_fg);
 		root.style.setProperty("--border", custom.colors.border);
-		return;
+	} else {
+		for (const prop of ["--bg", "--fg", "--muted", "--row-bg", "--accent", "--accent-fg", "--border", "color-scheme"]) {
+			root.style.removeProperty(prop);
+		}
+		root.dataset.theme = normalizeTheme(themeId);
 	}
-	for (const prop of ["--bg", "--fg", "--muted", "--row-bg", "--accent", "--accent-fg", "--border", "color-scheme"]) {
-		root.style.removeProperty(prop);
+	// `panel_opacity` (Settings → Appearance) overrides whatever the theme
+	// itself set for `--bg-alpha` — an independent "how see-through is the
+	// panel" control, not tied to any one theme. 0 means "no override".
+	if (settings && settings.panel_opacity > 0) {
+		root.style.setProperty("--bg-alpha", `${settings.panel_opacity}%`);
+	} else {
+		root.style.removeProperty("--bg-alpha");
 	}
-	root.dataset.theme = normalizeTheme(themeId);
 }
 
 async function loadSettings(): Promise<Settings> {
@@ -321,6 +332,7 @@ function updateMetaBar(): void {
 		parts.push(`copied ${item.copy_count}×`);
 		if (item.last_copied_at) parts.push(`last ${formatRelativeTime(item.last_copied_at)}`);
 	}
+	parts.push("⇧→ for details");
 	metaBar.textContent = parts.join("   ·   ");
 	metaBar.hidden = false;
 }
@@ -871,15 +883,120 @@ function buildDetailMetaRow(label: string, value: string): HTMLElement {
 	return row;
 }
 
-/** Full, untruncated view of a single item (Shift+Right) — dates, copy stats, and the complete rendered text, none of which fit in the compact row or meta-bar. */
+function buildDetailEditTextarea(item: Item): HTMLElement {
+	const wrapper = document.createElement("div");
+
+	const textarea = document.createElement("textarea");
+	textarea.className = "detail-edit-textarea";
+	textarea.value = item.text;
+	const commit = async (): Promise<void> => {
+		const next = textarea.value.trim();
+		detailEditingId = null;
+		if (next && next !== item.text) {
+			pushUndo({ type: "update_text", id: item.id, from: item.text, to: next });
+			await Store.updateItemText(item.id, next);
+		}
+		await refresh();
+	};
+	textarea.onkeydown = (e) => {
+		e.stopPropagation();
+		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void commit();
+		if (e.key === "Escape") {
+			detailEditingId = null;
+			buildDetailView(item);
+		}
+	};
+	wrapper.appendChild(textarea);
+
+	const actions = document.createElement("div");
+	actions.className = "detail-actions";
+	const saveBtn = document.createElement("button");
+	saveBtn.textContent = "Save (⌘Enter)";
+	saveBtn.onclick = () => void commit();
+	actions.appendChild(saveBtn);
+	const cancelBtn = document.createElement("button");
+	cancelBtn.textContent = "Cancel (Esc)";
+	cancelBtn.onclick = () => {
+		detailEditingId = null;
+		buildDetailView(item);
+	};
+	actions.appendChild(cancelBtn);
+	wrapper.appendChild(actions);
+
+	queueMicrotask(() => textarea.focus());
+	return wrapper;
+}
+
+function buildDetailTags(item: Item): HTMLElement {
+	const wrapper = document.createElement("div");
+	wrapper.className = "detail-tags-section";
+
+	const tags = extractTags([item]);
+	if (tags.length > 0) {
+		const pills = document.createElement("div");
+		pills.className = "detail-tags";
+		for (const tag of tags) {
+			const pill = document.createElement("span");
+			pill.className = "md-tag";
+			pill.textContent = `#${tag}`;
+			pills.appendChild(pill);
+		}
+		wrapper.appendChild(pills);
+	}
+
+	const addRow = document.createElement("div");
+	addRow.className = "detail-add-tag";
+	const tagInput = document.createElement("input");
+	tagInput.placeholder = "Add a tag";
+	const addTag = async (): Promise<void> => {
+		const clean = tagInput.value.trim().replace(/^#/, "").replace(/\s+/g, "-");
+		if (!clean) return;
+		const next = `${item.text} #${clean}`;
+		pushUndo({ type: "update_text", id: item.id, from: item.text, to: next });
+		await Store.updateItemText(item.id, next);
+		await refresh();
+	};
+	tagInput.onkeydown = (e) => {
+		e.stopPropagation();
+		if (e.key === "Enter") void addTag();
+	};
+	addRow.appendChild(tagInput);
+	const addBtn = document.createElement("button");
+	addBtn.textContent = "Add";
+	addBtn.onclick = () => void addTag();
+	addRow.appendChild(addBtn);
+	wrapper.appendChild(addRow);
+
+	return wrapper;
+}
+
+/** Full, untruncated view of a single item (Shift+Right) — dates, copy stats, tags, and the complete rendered text/edit form, none of which fit in the compact row or meta-bar. */
 function buildDetailView(item: Item): void {
 	detailView.innerHTML = "";
+
+	if (detailEditingId === item.id) {
+		detailView.appendChild(buildDetailEditTextarea(item));
+		return;
+	}
 
 	if (item.kind === "image") {
 		const img = document.createElement("img");
 		img.className = "detail-image";
 		img.src = convertFileSrc(item.text);
 		detailView.appendChild(img);
+	} else if (item.kind === "link") {
+		const cached = linkPreviewCache.get(item.text);
+		if (cached && cached !== "loading" && cached.title) {
+			const title = document.createElement("div");
+			title.className = "detail-text";
+			title.textContent = cached.title;
+			detailView.appendChild(title);
+		}
+		const link = document.createElement("div");
+		link.className = "detail-link";
+		link.textContent = item.text;
+		link.onclick = () => void open(item.text);
+		detailView.appendChild(link);
 	} else {
 		const text = document.createElement("div");
 		text.className = "detail-text";
@@ -895,6 +1012,8 @@ function buildDetailView(item: Item): void {
 		}
 		detailView.appendChild(text);
 	}
+
+	if (item.kind !== "image") detailView.appendChild(buildDetailTags(item));
 
 	const meta = document.createElement("div");
 	meta.className = "detail-meta";
@@ -932,6 +1051,14 @@ function buildDetailView(item: Item): void {
 			await refresh();
 		};
 		actions.appendChild(todoBtn);
+
+		const editBtn = document.createElement("button");
+		editBtn.textContent = "Edit";
+		editBtn.onclick = () => {
+			detailEditingId = item.id;
+			buildDetailView(item);
+		};
+		actions.appendChild(editBtn);
 	}
 
 	const deleteBtn = document.createElement("button");
@@ -954,6 +1081,7 @@ function buildDetailView(item: Item): void {
 
 function showDetail(item: Item): void {
 	detailItem = item;
+	detailEditingId = null;
 	buildDetailView(item);
 	detailView.hidden = false;
 	list.hidden = true;
@@ -962,6 +1090,7 @@ function showDetail(item: Item): void {
 
 function closeDetail(): void {
 	detailItem = null;
+	detailEditingId = null;
 	detailView.hidden = true;
 	list.hidden = false;
 	input.focus();
@@ -1240,11 +1369,18 @@ document.addEventListener("keydown", async (e) => {
 
 	const trimmed = input.value.trim();
 
-	if (!trimmed && multiSelected.size > 0) {
-		await copyMultiSelectionAndClose();
+	if (!trimmed) {
+		// The common "just browsing, nothing typed" case — this used to
+		// `return` unconditionally here, before ever reaching the
+		// act-on-selected-item branch below, so Enter silently did nothing.
+		if (multiSelected.size > 0) {
+			await copyMultiSelectionAndClose();
+		} else if (selected >= 0 && filtered[selected]) {
+			await actOnItem(filtered[selected]!);
+			await getCurrentWindow().hide();
+		}
 		return;
 	}
-	if (!trimmed) return;
 
 	if (modKey) {
 		await saveNew(trimmed);
@@ -1271,6 +1407,25 @@ input.addEventListener("input", () => {
 	const count = currentSuggestionCount(raw);
 	selected = count > 0 ? 0 : -1;
 	renderList();
+});
+
+// Pasting an image (⌘V with one on the clipboard) saves it as an image item
+// instead of pasting nothing/garbage into the text input — the natural
+// answer to "how do I capture an image" that doesn't require knowing about
+// the dedicated shortcut or Settings → Images.
+input.addEventListener("paste", (e) => {
+	const hasImage = Array.from(e.clipboardData?.items ?? []).some((item) => item.type.startsWith("image/"));
+	if (!hasImage) return;
+	e.preventDefault();
+	void (async () => {
+		try {
+			const item = await Store.captureClipboardImage();
+			pushUndo({ type: "add", item });
+			await refresh();
+		} catch (err) {
+			showStatusToast(String(err));
+		}
+	})();
 });
 
 // The Rust side emits "refresh" after any mutation made outside this window
@@ -1385,6 +1540,47 @@ function buildSortRow(current: Settings): HTMLElement {
 		await Store.setSettings(next);
 	};
 	row.appendChild(select);
+	return row;
+}
+
+/** 0 = no override, use whatever the active theme sets for `--bg-alpha`. */
+function buildOpacityRow(current: Settings): HTMLElement {
+	const row = document.createElement("div");
+	row.className = "settings-row";
+
+	const name = document.createElement("label");
+	name.textContent = "Panel opacity";
+	row.appendChild(name);
+
+	const slider = document.createElement("input");
+	slider.type = "range";
+	slider.min = "15";
+	slider.max = "100";
+	slider.value = String(current.panel_opacity > 0 ? current.panel_opacity : 90);
+	slider.disabled = current.panel_opacity === 0;
+	slider.oninput = () => {
+		if (settings) {
+			settings.panel_opacity = Number(slider.value);
+			applyTheme(settings.theme);
+		}
+	};
+	slider.onchange = async () => {
+		if (!settings) return;
+		await Store.setSettings(settings);
+	};
+	row.appendChild(slider);
+
+	const resetBtn = document.createElement("button");
+	resetBtn.textContent = current.panel_opacity === 0 ? "Override theme opacity" : "Use theme default";
+	resetBtn.onclick = async () => {
+		const next = { ...current, panel_opacity: current.panel_opacity === 0 ? 90 : 0 };
+		settings = next;
+		applyTheme(next.theme);
+		await Store.setSettings(next);
+		await openSettings();
+	};
+	row.appendChild(resetBtn);
+
 	return row;
 }
 
@@ -1642,7 +1838,8 @@ function buildCaptureImageRow(): HTMLElement {
 	button.textContent = "Capture image";
 	button.onclick = async () => {
 		try {
-			await Store.captureClipboardImage();
+			const item = await Store.captureClipboardImage();
+			pushUndo({ type: "add", item });
 			await openSettings();
 		} catch (e) {
 			button.textContent = String(e);
@@ -1693,10 +1890,15 @@ function buildSyncRows(current: Settings): HTMLElement[] {
 	backendRow.appendChild(backendLabel);
 	const backendSelect = document.createElement("select");
 	backendSelect.dataset.focusAnchor = "backend-select";
-	for (const value of ["local", "s3"] as const) {
+	const backendLabels: Record<Settings["backend"], string> = {
+		local: "Local (this device only)",
+		s3: "S3-compatible bucket",
+		folder: "Folder (e.g. iCloud Drive, Dropbox)",
+	};
+	for (const value of ["local", "s3", "folder"] as const) {
 		const option = document.createElement("option");
 		option.value = value;
-		option.textContent = value === "local" ? "Local (this device only)" : "S3-compatible bucket";
+		option.textContent = backendLabels[value];
 		option.selected = current.backend === value;
 		backendSelect.appendChild(option);
 	}
@@ -1735,6 +1937,24 @@ function buildSyncRows(current: Settings): HTMLElement[] {
 			row.appendChild(fieldInput);
 			rows.push(row);
 		}
+	}
+	if (current.backend === "folder") {
+		const row = document.createElement("div");
+		row.className = "settings-row";
+		const labelEl = document.createElement("label");
+		labelEl.textContent = "Folder path (e.g. ~/Library/Mobile Documents/com~apple~CloudDocs/shiftshift)";
+		row.appendChild(labelEl);
+		const pathInput = document.createElement("input");
+		pathInput.type = "text";
+		pathInput.placeholder = "/Users/you/Library/Mobile Documents/.../shiftshift";
+		pathInput.value = current.folder_path;
+		pathInput.onchange = async () => {
+			const next = { ...current, folder_path: pathInput.value };
+			settings = next;
+			await Store.setSettings(next);
+		};
+		row.appendChild(pathInput);
+		rows.push(row);
 	}
 	return rows;
 }
@@ -1929,6 +2149,7 @@ async function openSettings(): Promise<void> {
 	settingsView.appendChild(heading("Appearance"));
 	settingsView.appendChild(buildThemeRow(current));
 	settingsView.appendChild(buildSortRow(current));
+	settingsView.appendChild(buildOpacityRow(current));
 
 	settingsView.appendChild(heading("Custom themes"));
 	const customThemesSection = document.createElement("div");

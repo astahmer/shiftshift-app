@@ -187,9 +187,15 @@
 	--row-bg: #2a2f45;
 	--accent: #8ecdf7;
 	--accent-fg: #0b1020;
-	--border: rgba(255, 255, 255, 0.22);
-	--bg-alpha: 42%;
-	--backdrop-blur: 28px;
+	--border: rgba(255, 255, 255, 0.28);
+	/* Genuinely translucent (not just a tinted solid) — a heavy blur plus
+	   boosted saturation (the actual "frosted glass" trick: without it, a
+	   heavy blur just looks muddy/gray) on both the panel and every
+	   inner "card" (rows/inputs), not only the outer shell. */
+	--bg-alpha: 24%;
+	--row-alpha: 55%;
+	--backdrop-blur: 32px;
+	--backdrop-saturate: 200%;
 	--radius: 20px;
 	--radius-sm: 12px;
 	--shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
@@ -326,7 +332,9 @@
 	--radius-sm: 10px;
 	--panel-border-width: 1px;
 	--bg-alpha: 90%;
+	--row-alpha: 100%;
 	--backdrop-blur: 0px;
+	--backdrop-saturate: 100%;
 	--shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
 	/* Small-element shadow (buttons/inputs/rows) — separate from `--shadow`
 	   (the outer panel), since a theme may want one without the other.
@@ -364,7 +372,7 @@ button {
 	text-transform: var(--text-transform-ui);
 	letter-spacing: var(--letter-spacing-ui);
 	color: var(--fg);
-	background: var(--row-bg);
+	background: color-mix(in srgb, var(--row-bg) var(--row-alpha, 100%), transparent);
 	border: var(--panel-border-width, 1px) solid var(--border);
 	border-radius: calc(var(--radius-sm, 10px) * 0.6);
 	box-shadow: var(--shadow-sm, none);
@@ -393,8 +401,8 @@ button:active {
 	border-radius: var(--radius, 16px);
 	border: var(--panel-border-width, 1px) solid var(--border);
 	box-shadow: var(--shadow, 0 16px 40px rgba(0, 0, 0, 0.35));
-	backdrop-filter: blur(var(--backdrop-blur, 0px));
-	-webkit-backdrop-filter: blur(var(--backdrop-blur, 0px));
+	backdrop-filter: blur(var(--backdrop-blur, 0px)) saturate(var(--backdrop-saturate, 100%));
+	-webkit-backdrop-filter: blur(var(--backdrop-blur, 0px)) saturate(var(--backdrop-saturate, 100%));
 }
 
 ::-webkit-scrollbar {
@@ -417,7 +425,7 @@ button:active {
 
 .capture-input {
 	flex: 1;
-	background: var(--row-bg);
+	background: color-mix(in srgb, var(--row-bg) var(--row-alpha, 100%), transparent);
 	border: var(--panel-border-width, 1px) solid var(--border);
 	border-radius: var(--radius-sm, 10px);
 	padding: 11px 13px;
@@ -452,7 +460,7 @@ button:active {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	background: var(--row-bg);
+	background: color-mix(in srgb, var(--row-bg) var(--row-alpha, 100%), transparent);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm, 10px);
 	color: var(--muted);
@@ -519,7 +527,7 @@ button:active {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	background: var(--row-bg);
+	background: color-mix(in srgb, var(--row-bg) var(--row-alpha, 100%), transparent);
 	border-radius: var(--radius-sm, 10px);
 	padding: 8px 10px;
 	font-size: 13.5px;
@@ -616,7 +624,7 @@ button:active {
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
-	background: var(--row-bg);
+	background: color-mix(in srgb, var(--row-bg) var(--row-alpha, 100%), transparent);
 	border-radius: var(--radius-sm, 10px);
 	padding: 8px 10px;
 	margin: 2px 0;
@@ -929,6 +937,24 @@ button:active {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	min-width: 0;
+	color: var(--accent);
+	text-decoration: underline;
+	text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+	text-underline-offset: 2px;
+}
+
+.detail-link {
+	color: var(--accent);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+	word-break: break-all;
+}
+
+.detail-link-url {
+	color: var(--muted);
+	font-size: 0.85em;
+	word-break: break-all;
 }
 
 /* --- Detail view (Shift+Right on a selected row) --- */
@@ -964,11 +990,52 @@ button:active {
 	align-self: flex-start;
 }
 
+.detail-edit-textarea {
+	width: 100%;
+	min-height: 140px;
+	resize: vertical;
+	background: color-mix(in srgb, var(--row-bg) var(--row-alpha, 100%), transparent);
+	color: var(--fg);
+	font-family: var(--font-family);
+	font-size: 14px;
+	line-height: 1.5;
+	border: var(--panel-border-width, 1px) solid var(--accent);
+	border-radius: var(--radius-sm, 10px);
+	padding: 8px 10px;
+}
+
+.detail-tags-section {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.detail-tags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.detail-add-tag {
+	display: flex;
+	gap: 6px;
+}
+
+.detail-add-tag input {
+	flex: 1;
+	background: var(--bg);
+	color: var(--fg);
+	border: var(--panel-border-width, 1px) solid var(--border);
+	border-radius: calc(var(--radius-sm, 10px) * 0.6);
+	padding: 5px 8px;
+	font-size: 12.5px;
+}
+
 .detail-meta {
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
-	background: var(--row-bg);
+	background: color-mix(in srgb, var(--row-bg) var(--row-alpha, 100%), transparent);
 	border-radius: var(--radius-sm, 10px);
 	padding: 8px 10px;
 	font-size: 12px;
@@ -995,7 +1062,7 @@ button:active {
 }
 
 .detail-actions button {
-	background: var(--row-bg);
+	background: color-mix(in srgb, var(--row-bg) var(--row-alpha, 100%), transparent);
 	color: var(--fg);
 	border: var(--panel-border-width, 1px) solid var(--border);
 	border-radius: calc(var(--radius-sm, 10px) * 0.6);
@@ -1020,7 +1087,7 @@ button:active {
 	bottom: 10px;
 	left: 50%;
 	transform: translateX(-50%);
-	background: var(--row-bg);
+	background: color-mix(in srgb, var(--row-bg) var(--row-alpha, 100%), transparent);
 	color: var(--fg);
 	border: 1px solid var(--border);
 	border-radius: calc(var(--radius-sm, 10px) * 0.6);
