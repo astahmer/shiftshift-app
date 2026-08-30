@@ -313,6 +313,23 @@ fn do_capture(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Mirrors `capture-logic.ts`'s `detectKind` (`/^https?:\/\/\S+$/`) — the
+/// frontend's typed-capture path already classifies a bare URL as a link;
+/// this brings the same classification to the gesture/CLI/clipboard-watch
+/// paths, which previously hardcoded every capture as a plain Note
+/// regardless of content, so a captured URL never got the link icon,
+/// favicon/title fetch, or click-to-open behavior.
+pub(crate) fn detect_kind(text: &str) -> crate::store::ItemKind {
+    let trimmed = text.trim();
+    let rest = trimmed.strip_prefix("https://").or_else(|| trimmed.strip_prefix("http://"));
+    let is_bare_url = matches!(rest, Some(r) if !r.is_empty() && !r.contains(char::is_whitespace));
+    if is_bare_url {
+        crate::store::ItemKind::Link
+    } else {
+        crate::store::ItemKind::Note
+    }
+}
+
 /// Best-effort "what app is frontmost" lookup for the source-app field on
 /// captured items (Raycast-style per-item source tracking). Goes through
 /// System Events' AppleScript bridge rather than the Accessibility API, so
@@ -372,7 +389,7 @@ pub(crate) fn handle_captured_text(app: &AppHandle, text: &str, source_app: Opti
     }
 
     let db = app.state::<db::Db>();
-    let item = db.0.add_item(text, crate::store::ItemKind::Note, source_app)?;
+    let item = db.0.add_item(text, detect_kind(text), source_app)?;
     *LAST_CAPTURE.lock().unwrap() = Some((item.id.clone(), Instant::now()));
     let _ = db.0.log_event(Some(&item.id), "created", Some(&item.text));
     let _ = app.emit("refresh", ());
@@ -420,5 +437,32 @@ fn press_copy_chord() -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     {
         Err("copy-chord simulation not yet wired up for this platform".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::ItemKind;
+
+    #[test]
+    fn classifies_a_bare_url_as_a_link() {
+        assert_eq!(detect_kind("https://example.com/path"), ItemKind::Link);
+        assert_eq!(detect_kind("http://example.com"), ItemKind::Link);
+    }
+
+    #[test]
+    fn classifies_plain_text_as_a_note() {
+        assert_eq!(detect_kind("just some text"), ItemKind::Note);
+    }
+
+    #[test]
+    fn does_not_classify_a_url_embedded_in_a_sentence_as_a_link() {
+        assert_eq!(detect_kind("see https://example.com for details"), ItemKind::Note);
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace_before_checking() {
+        assert_eq!(detect_kind("  https://example.com  \n"), ItemKind::Link);
     }
 }
