@@ -66,6 +66,15 @@ pub struct Settings {
     /// menu-bar icon" is the intended steady state, not an oversight.
     pub show_in_dock: bool,
     pub show_tray_icon: bool,
+    /// A plain directory path (e.g. inside iCloud Drive/Dropbox/Syncthing) —
+    /// used when `backend == "folder"`. Sync is entirely the filesystem
+    /// client's job; see `store/folder.rs`'s module doc for the same
+    /// single-writer caveat `S3Store` has.
+    pub folder_path: String,
+    /// Overrides the active theme's own `--bg-alpha` when `> 0` (0 means "no
+    /// override, use whatever the theme sets") — a user-facing "how see-
+    /// through is the panel" control independent of picking a theme.
+    pub panel_opacity: u8,
 }
 
 impl Default for Settings {
@@ -87,6 +96,8 @@ impl Default for Settings {
             sort_mode: "manual".to_string(),
             show_in_dock: false,
             show_tray_icon: false,
+            folder_path: String::new(),
+            panel_opacity: 0,
         }
     }
 }

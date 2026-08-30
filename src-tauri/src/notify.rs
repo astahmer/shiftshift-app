@@ -36,7 +36,12 @@ pub fn notify_captured(app: &AppHandle, item: &Item) {
     if settings.notify_sound {
         builder = builder.sound("default");
     }
-    let _ = builder.show();
+    // Was `let _ = builder.show();` — silently swallowed whatever OS-level
+    // permission/registration error caused nothing to appear, with no way
+    // to tell "it's disabled" apart from "it's silently failing".
+    if let Err(e) = builder.show() {
+        eprintln!("shiftshift: notification failed to show: {e}");
+    }
 }
 
 #[cfg(test)]

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::store::ItemKind;
+use crate::store::{Item, ItemKind};
 
 fn images_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("images");
@@ -53,18 +53,20 @@ pub fn copy_image_to_clipboard(path: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-/// Saves the clipboard's current image as a new item. Errors (surfaced to
-/// the caller, e.g. a settings-screen toast) if the clipboard has no image.
-pub fn capture_clipboard_image(app: &AppHandle) -> Result<(), String> {
+/// Saves the clipboard's current image as a new item, returning it (so the
+/// frontend can push an undo entry the same way it does for text captures).
+/// Errors (surfaced to the caller, e.g. a settings-screen toast) if the
+/// clipboard has no image.
+pub fn capture_clipboard_image(app: &AppHandle) -> Result<Item, String> {
     let mut clip = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let image = clip.get_image().map_err(|_| "the clipboard has no image right now".to_string())?;
     let path = images_dir(app)?.join(format!("{}.png", uuid::Uuid::new_v4()));
     write_png(&image, &path)?;
 
     let db = app.state::<crate::db::Db>();
-    let item = db.0.add_item(&path.to_string_lossy(), ItemKind::Image, None)?;
+    let item = db.0.add_item(&path.to_string_lossy(), ItemKind::Image, crate::capture::frontmost_app_name())?;
     let _ = db.0.log_event(Some(&item.id), "created", Some("image"));
     let _ = app.emit("refresh", ());
     crate::notify::notify_captured(app, &item);
-    Ok(())
+    Ok(item)
 }

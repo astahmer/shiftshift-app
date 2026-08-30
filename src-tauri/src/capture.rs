@@ -277,6 +277,10 @@ pub fn capture_selection(app: &AppHandle) {
 }
 
 fn do_capture(app: &AppHandle) -> Result<(), String> {
+    // Read before the copy chord fires — the frontmost app shouldn't change
+    // during that, but there's no reason to risk the race.
+    let source_app = frontmost_app_name();
+
     let mut clip = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let old = clip.get_text().ok();
     let _ = clip.set_text(SENTINEL.to_string());
@@ -300,13 +304,42 @@ fn do_capture(app: &AppHandle) -> Result<(), String> {
 
     match captured {
         Some(text) => {
-            handle_captured_text(app, text.trim(), None)?;
+            handle_captured_text(app, text.trim(), source_app)?;
         }
         None => {
             restore(&mut clip, old);
         }
     }
     Ok(())
+}
+
+/// Best-effort "what app is frontmost" lookup for the source-app field on
+/// captured items (Raycast-style per-item source tracking). Goes through
+/// System Events' AppleScript bridge rather than the Accessibility API, so
+/// it works without the same permission grant the double-shift hook needs —
+/// AppleScript's "get name of first process whose frontmost is true" is a
+/// read-only System Events query, not an Accessibility-gated action.
+#[cfg(target_os = "macos")]
+pub(crate) fn frontmost_app_name() -> Option<String> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(r#"tell application "System Events" to get name of first application process whose frontmost is true"#)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn frontmost_app_name() -> Option<String> {
+    None
 }
 
 fn restore(clip: &mut arboard::Clipboard, old: Option<String>) {

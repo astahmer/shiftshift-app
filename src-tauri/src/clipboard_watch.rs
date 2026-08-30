@@ -50,6 +50,7 @@ pub fn start(app: AppHandle) {
         }
         *last = Some(text.clone());
         drop(last);
-        let _ = crate::capture::handle_captured_text(&app, trimmed, Some("clipboard".to_string()));
+        let source = crate::capture::frontmost_app_name().unwrap_or_else(|| "Clipboard".to_string());
+        let _ = crate::capture::handle_captured_text(&app, trimmed, Some(source));
     });
 }

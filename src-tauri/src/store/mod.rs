@@ -16,9 +16,11 @@
 //! instead of clobbering — the `Store` trait boundary below is exactly
 //! where that change would land, and no caller code should need to change.
 
+mod folder;
 mod local;
 mod s3;
 
+pub use folder::FolderStore;
 pub use local::LocalSqliteStore;
 pub use s3::S3Store;
 

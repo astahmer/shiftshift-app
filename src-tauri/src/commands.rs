@@ -119,7 +119,7 @@ pub fn note_own_clipboard_write(text: String) {
 }
 
 #[tauri::command]
-pub fn capture_clipboard_image(app: AppHandle) -> Result<(), String> {
+pub fn capture_clipboard_image(app: AppHandle) -> Result<Item, String> {
     crate::images::capture_clipboard_image(&app)
 }
 
