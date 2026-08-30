@@ -5,6 +5,7 @@ mod cli_server;
 mod commands;
 mod custom_themes;
 mod db;
+mod db_encryption;
 mod export;
 mod images;
 mod link_preview;

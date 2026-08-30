@@ -75,7 +75,24 @@ pub struct Settings {
     /// override, use whatever the theme sets") — a user-facing "how see-
     /// through is the panel" control independent of picking a theme.
     pub panel_opacity: u8,
+    /// App names (case-insensitive substring match against the frontmost
+    /// app) that clipboard-watch never auto-captures from — password
+    /// managers by default, so a copied password/2FA code doesn't end up
+    /// sitting in plaintext in shiftshift's history. Only applies to
+    /// clipboard-watch; an explicit double-shift/CLI capture always goes
+    /// through regardless, since that's a deliberate action.
+    pub excluded_apps: Vec<String>,
+    /// Encrypts the local SQLite store at rest (SQLCipher) — off by default
+    /// so existing plaintext databases are never touched unless explicitly
+    /// opted into; see `store/local.rs`'s `migrate_plaintext_to_encrypted`
+    /// for how an existing database is migrated the first time this turns
+    /// on. Only affects the local backend; S3/folder backends store plain
+    /// JSON regardless (out of scope for this pass).
+    pub encrypt_local_storage: bool,
 }
+
+pub const DEFAULT_EXCLUDED_APPS: &[&str] =
+    &["1Password", "Bitwarden", "Dashlane", "LastPass", "Keychain Access", "KeePassXC", "Enpass", "NordPass", "RoboForm"];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -98,6 +115,8 @@ impl Default for Settings {
             show_tray_icon: false,
             folder_path: String::new(),
             panel_opacity: 0,
+            excluded_apps: DEFAULT_EXCLUDED_APPS.iter().map(|s| s.to_string()).collect(),
+            encrypt_local_storage: false,
         }
     }
 }

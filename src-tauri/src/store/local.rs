@@ -1,38 +1,125 @@
+use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection};
 
 use super::{HistoryEntry, Item, ItemKind, MoveDirection, Store};
+use crate::db_encryption::sql_quote;
+
+const SCHEMA_SQL: &str = "CREATE TABLE IF NOT EXISTS items (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    bookmarked INTEGER NOT NULL DEFAULT 0,
+    rank REAL NOT NULL DEFAULT 0,
+    source_app TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS history (
+    id TEXT PRIMARY KEY,
+    item_id TEXT,
+    action TEXT NOT NULL,
+    detail TEXT,
+    at TEXT NOT NULL
+);";
 
 pub struct LocalSqliteStore {
     conn: Mutex<Connection>,
 }
 
 impl LocalSqliteStore {
-    pub fn open(path: &std::path::Path) -> Result<Self, String> {
-        let conn = Connection::open(path).map_err(|e| e.to_string())?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS items (
-                id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                text TEXT NOT NULL,
-                done INTEGER NOT NULL DEFAULT 0,
-                bookmarked INTEGER NOT NULL DEFAULT 0,
-                rank REAL NOT NULL DEFAULT 0,
-                source_app TEXT,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS history (
-                id TEXT PRIMARY KEY,
-                item_id TEXT,
-                action TEXT NOT NULL,
-                detail TEXT,
-                at TEXT NOT NULL
-            );",
-        )
-        .map_err(|e| e.to_string())?;
+    pub fn open(path: &Path) -> Result<Self, String> {
+        Self::open_with_key(path, None)
+    }
+
+    /// `key` is `None` when `Settings::encrypt_local_storage` is off. A
+    /// `Some` key on a plaintext file triggers a one-time migration
+    /// (`migrate_plaintext_to_encrypted`); `None` against a file that's
+    /// still encrypted from a previously-enabled setting falls back to the
+    /// stored key rather than losing access to it — see `db_encryption`'s
+    /// module doc for the key itself.
+    pub fn open_with_key(path: &Path, key: Option<&str>) -> Result<Self, String> {
+        let conn = match key {
+            Some(k) => Self::open_encrypted(path, k)?,
+            None => Self::open_plain_or_fallback(path)?,
+        };
+        conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
         Self::migrate_pinned_to_bookmarked(&conn)?;
         Ok(Self { conn: Mutex::new(conn) })
+    }
+
+    fn is_readable(conn: &Connection) -> bool {
+        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0)).is_ok()
+    }
+
+    /// Opens `path` with SQLCipher's `key` pragma set. That's enough if the
+    /// file is already encrypted with this key, or is fresh/empty. A file
+    /// with pre-existing PLAINTEXT data doesn't get retroactively encrypted
+    /// just by setting a key on it — SQLCipher fails to read the (actually
+    /// unencrypted) pages as ciphertext, which `is_readable` below catches,
+    /// triggering a one-time migration instead.
+    fn open_encrypted(path: &Path, key: &str) -> Result<Connection, String> {
+        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        conn.execute_batch(&format!("PRAGMA key = '{}';", sql_quote(key))).map_err(|e| e.to_string())?;
+        if Self::is_readable(&conn) {
+            return Ok(conn);
+        }
+        drop(conn);
+        Self::migrate_plaintext_to_encrypted(path, key)
+    }
+
+    /// `Settings::encrypt_local_storage` is off, but the file might still be
+    /// encrypted from before it was turned off — falls back to the stored
+    /// key rather than silently losing access to real data.
+    fn open_plain_or_fallback(path: &Path) -> Result<Connection, String> {
+        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        if Self::is_readable(&conn) {
+            return Ok(conn);
+        }
+        drop(conn);
+        let key = crate::db_encryption::get_or_create_key()?;
+        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        conn.execute_batch(&format!("PRAGMA key = '{}';", sql_quote(&key))).map_err(|e| e.to_string())?;
+        if Self::is_readable(&conn) {
+            eprintln!("shiftshift: local database is still encrypted even though encryption is off in settings; using the stored key so it stays readable");
+            Ok(conn)
+        } else {
+            Err("could not open the local database: it isn't valid SQLite, and the stored encryption key doesn't open it either".to_string())
+        }
+    }
+
+    /// Copies an existing plaintext database into a freshly-encrypted one
+    /// via SQLCipher's `sqlcipher_export()`, then swaps files. The
+    /// plaintext original is kept alongside as a `.plaintext-backup`, never
+    /// deleted, so a failed or interrupted migration can't lose data.
+    fn migrate_plaintext_to_encrypted(path: &Path, key: &str) -> Result<Connection, String> {
+        let encrypted_path = path.with_extension("sqlite3.encrypting");
+        let _ = std::fs::remove_file(&encrypted_path); // clear a stale attempt, if any
+
+        let plain_conn = Connection::open(path).map_err(|e| e.to_string())?;
+        plain_conn
+            .execute_batch(&format!(
+                "ATTACH DATABASE '{}' AS encrypted KEY '{}';",
+                sql_quote(&encrypted_path.to_string_lossy()),
+                sql_quote(key)
+            ))
+            .map_err(|e| e.to_string())?;
+        plain_conn.query_row("SELECT sqlcipher_export('encrypted')", [], |_| Ok(())).map_err(|e| e.to_string())?;
+        plain_conn.execute_batch("DETACH DATABASE encrypted;").map_err(|e| e.to_string())?;
+        drop(plain_conn);
+
+        let backup_path = path.with_extension("sqlite3.plaintext-backup");
+        std::fs::rename(path, &backup_path).map_err(|e| e.to_string())?;
+        std::fs::rename(&encrypted_path, path).map_err(|e| e.to_string())?;
+        eprintln!(
+            "shiftshift: migrated the local database to encrypted storage; the previous plaintext file is kept at {}",
+            backup_path.display()
+        );
+
+        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        conn.execute_batch(&format!("PRAGMA key = '{}';", sql_quote(key))).map_err(|e| e.to_string())?;
+        Ok(conn)
     }
 
     /// One-off migration for databases created before `pinned` was renamed to
@@ -430,5 +517,77 @@ mod tests {
             s.log_event(None, &format!("event-{i}"), None).unwrap();
         }
         assert_eq!(s.list_history(2).unwrap().len(), 2);
+    }
+
+    // --- Encryption (SQLCipher) — real files, since this is about at-rest
+    // persistence; `:memory:` databases have nothing on disk to encrypt.
+
+    fn temp_db_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("shiftshift-encryption-test-{name}-{}.sqlite3", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn opens_a_fresh_database_with_a_key_and_reopens_it_with_the_same_key() {
+        let path = temp_db_path("fresh");
+        let key = "test-key-aaaa";
+        {
+            let store = LocalSqliteStore::open_with_key(&path, Some(key)).unwrap();
+            store.add_item("secret note", ItemKind::Note, None).unwrap();
+        }
+        let reopened = LocalSqliteStore::open_with_key(&path, Some(key)).unwrap();
+        let items = reopened.list_items().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "secret note");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn wrong_key_cannot_read_an_encrypted_database() {
+        let path = temp_db_path("wrong-key");
+        {
+            let store = LocalSqliteStore::open_with_key(&path, Some("correct-key")).unwrap();
+            store.add_item("secret note", ItemKind::Note, None).unwrap();
+        }
+        assert!(LocalSqliteStore::open_with_key(&path, Some("wrong-key")).is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn migrates_an_existing_plaintext_database_to_encrypted_and_keeps_a_backup() {
+        let path = temp_db_path("migrate");
+        {
+            let plain = LocalSqliteStore::open(&path).unwrap();
+            plain.add_item("pre-existing note", ItemKind::Note, None).unwrap();
+        }
+        let key = "new-key-bbbb";
+        let encrypted = LocalSqliteStore::open_with_key(&path, Some(key)).unwrap();
+        let items = encrypted.list_items().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "pre-existing note");
+
+        let backup_path = path.with_extension("sqlite3.plaintext-backup");
+        assert!(backup_path.exists(), "plaintext backup should be kept, not deleted");
+
+        // The migrated file really is encrypted now, not just readable by
+        // coincidence — the wrong key must fail against it. (Not testing
+        // the no-key path here: that falls back to the real macOS Keychain,
+        // which a test shouldn't read from or write to.)
+        drop(encrypted);
+        assert!(LocalSqliteStore::open_with_key(&path, Some("not-the-right-key")).is_err());
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&backup_path);
+    }
+
+    #[test]
+    fn opening_without_a_key_still_works_on_a_plain_database() {
+        let path = temp_db_path("plain-passthrough");
+        {
+            let store = LocalSqliteStore::open(&path).unwrap();
+            store.add_item("plain note", ItemKind::Note, None).unwrap();
+        }
+        let reopened = LocalSqliteStore::open(&path).unwrap();
+        assert_eq!(reopened.list_items().unwrap()[0].text, "plain note");
+        let _ = std::fs::remove_file(&path);
     }
 }

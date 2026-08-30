@@ -31,7 +31,12 @@ impl Db {
             }
         }
         let db_path = app_data_dir.join("shiftshift.sqlite3");
-        let store = LocalSqliteStore::open(&db_path)?;
+        let store = if settings.encrypt_local_storage {
+            let key = crate::db_encryption::get_or_create_key()?;
+            LocalSqliteStore::open_with_key(&db_path, Some(&key))?
+        } else {
+            LocalSqliteStore::open(&db_path)?
+        };
         Ok(Self(Arc::new(store)))
     }
 }
