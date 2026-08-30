@@ -1,9 +1,11 @@
 mod capture;
+mod clipboard_watch;
 pub mod cli_protocol;
 mod cli_server;
 mod commands;
 mod db;
 mod export;
+mod images;
 #[cfg(target_os = "macos")]
 mod mac_tap;
 mod notify;
@@ -11,9 +13,11 @@ mod panel;
 mod settings;
 mod store;
 mod templates;
+mod tray;
 mod vibrancy;
 
 use tauri::Manager;
+use tauri_plugin_autostart::ManagerExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,22 +31,34 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("resolvable app data dir");
-            let db = db::Db::open(&app_data_dir).expect("failed to open local store");
-            app.manage(db);
 
             let settings = settings::load(&app_data_dir);
+            let db = db::Db::open(&app_data_dir, &settings).expect("failed to open store");
+            app.manage(db);
+
             let fallback_toggle = settings.fallback_toggle.clone();
             let fallback_capture = settings.fallback_capture.clone();
+            let fallback_image = settings.fallback_image.clone();
+            let launch_at_login = settings.launch_at_login;
             app.manage(settings::SettingsState(std::sync::Mutex::new(settings)));
 
             let templates = templates::load(&app_data_dir);
             app.manage(templates::TemplatesState(std::sync::Mutex::new(templates)));
 
             let handle = app.handle().clone();
-            if let Err(e) = capture::register_fallback_shortcuts(&handle, &fallback_toggle, &fallback_capture) {
+            if let Err(e) = capture::register_fallback_shortcuts(&handle, &fallback_toggle, &fallback_capture, &fallback_image) {
                 eprintln!("shiftshift: {e}");
             }
             cli_server::start(handle.clone());
+            clipboard_watch::start(handle.clone());
+            tray::build(app)?;
+
+            // Sync the OS-level login-item registration in case it drifted
+            // (e.g. the setting was toggled, then the app was reinstalled).
+            let sync_result = if launch_at_login { app.autolaunch().enable() } else { app.autolaunch().disable() };
+            if let Err(e) = sync_result {
+                eprintln!("shiftshift: could not sync login-item registration: {e}");
+            }
 
             if let Some(panel) = app.get_webview_window("panel") {
                 vibrancy::apply(&panel);
@@ -64,6 +80,12 @@ pub fn run() {
             commands::update_item_text,
             commands::delete_item,
             commands::clear_completed,
+            commands::move_item,
+            commands::list_history,
+            commands::log_used,
+            commands::note_own_clipboard_write,
+            commands::capture_clipboard_image,
+            commands::copy_image_to_clipboard,
             commands::get_settings,
             commands::set_settings,
             commands::export_markdown,
@@ -72,6 +94,16 @@ pub fn run() {
             commands::update_template,
             commands::delete_template,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running shiftshift");
+        .build(tauri::generate_context!())
+        .expect("error while building shiftshift")
+        // "Close to tray": Cmd+Q / Dock > Quit fire ExitRequested with
+        // `code: None` (user interaction) — prevented, since the panel has no
+        // title bar to close and the only way back would otherwise be
+        // relaunching the whole app. `code: Some(_)` means an explicit
+        // `app.exit()` call (the tray menu's "Quit"), which must go through.
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+                api.prevent_exit();
+            }
+        });
 }

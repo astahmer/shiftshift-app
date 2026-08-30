@@ -22,9 +22,13 @@ either.
   (`src-tauri/src/capture.rs`), with `CmdOrCtrl+Shift+Space/C` global-shortcut
   fallback when the raw hook is unavailable or denied.
 - **Storage**: shiftshift's "pick a backend" model — a `Store` trait is the
-  seam, `LocalSqliteStore` is the only implementation today. See the
-  conflict-resolution note in `store/mod.rs` for what changes when a remote
-  backend is added.
+  seam. `LocalSqliteStore` (default) and `S3Store` (any S3-compatible
+  bucket, single-writer only) both implement it; picking one is a Settings
+  toggle, switching takes effect on next launch. See the conflict-resolution
+  note in `store/mod.rs` for the single-writer caveat, and `store/s3.rs`'s
+  module doc — it's implemented and unit-tested at the mapping/logic level,
+  but not yet verified against a real bucket (no test credentials available
+  while building it).
 
 ## Requirements
 
@@ -69,27 +73,45 @@ pnpm tauri dev
 On first run, macOS will show the app as "not responding to Accessibility
 requests" until you grant it under System Settings → Privacy & Security →
 Accessibility — until then, double-Shift capture is inactive but the
-`Cmd+Shift+Space` / `Cmd+Shift+C` fallback shortcuts still work.
+fallback shortcuts (`Cmd+Shift+Space` toggle / `Cmd+Shift+C` capture /
+`Cmd+Shift+I` image, all reconfigurable or disableable from Settings) still
+work.
 
 ## Features
 
-- **Settings** (gear icon in the panel): theme, double-shift bindings,
-  fallback shortcuts, notifications, snippet templates, Markdown export. All
-  persist to `settings.json` and apply live, no restart needed.
+- **Settings** (gear icon in the panel): theme, capture behavior, double-shift
+  bindings, fallback shortcuts, notifications, sync backend, snippet
+  templates, Markdown export, history. All persist to `settings.json` and
+  apply live, no restart needed (except the sync backend choice).
 - **Themes**: 16 presets (Tokyo Night, Dracula, Nord, Catppuccin, Gruvbox,
   Rosé Pine, Solarized, GitHub, VS Code, One Dark — each with a light/dark
   sibling) — see `src/themes.ts`. Switch from Settings or via `/light`,
   `/dark` (jumps to the current theme's light/dark sibling), `/theme <name>`.
 - **Native vibrancy**: the panel uses macOS `NSVisualEffectView` / Windows DWM
   acrylic (`src-tauri/src/vibrancy.rs`, ported from cooper's `glass.rs`).
-- **Keyboard-driven list**: typing filters the list below (fuzzy-ish
-  substring match, plus tag filters — `@bookmarks`/`@links`/`@todos`/`@notes`
-  or the equivalent `has:x` form, combinable with a text query e.g.
-  `@todos ship`). `↑`/`↓` selects a row, `Enter` acts on it (copies
-  note/todo text, opens a link), `⌘Enter` always saves the typed text as a
-  new item regardless of selection. `Space` toggles a selected todo's done
-  state, `⌘B` bookmarks, `⌘E` edits inline, `Backspace`/`Delete` (with the
-  input empty) deletes. `Escape` hides the panel.
+- **Capture behavior** (Settings → Capture behavior): silent (default, saves
+  without showing the panel), open (saves and shows it), or draft (shows the
+  panel with the captured text prefilled, not yet saved — review/edit, then
+  Enter to save). Applies to the double-shift gesture, the CLI, and
+  clipboard-watch alike, via `capture::handle_captured_text`.
+- **Clipboard watch** (off by default): auto-captures everything you copy as
+  a note, own writes excluded (`clipboard_watch.rs`).
+- **Keyboard-driven list**: typing filters the list below (substring match,
+  plus tag filters — `@bookmarks`/`@links`/`@todos`/`@notes` or the
+  equivalent `has:x` form, combinable with a text query e.g. `@todos ship`).
+  `↑`/`↓` selects a row, `Enter` acts on it and closes the panel (copies
+  note/todo text, opens a link, copies an image back to the clipboard),
+  `⌘Enter` always saves the typed text as a new item regardless of
+  selection. `Shift+Enter` adds the selected row to a multi-selection;
+  plain `Enter` with one or more selected copies them as a numbered list
+  ("1. foo\n2. bar") and closes. `Space` toggles a selected todo's done
+  state, `⌘B` bookmarks, `⌘T` converts to a todo, `⌘E` edits inline,
+  `⌥↑`/`⌥↓` reorders (unfiltered view only), `Backspace`/`Delete` (input
+  empty) deletes. `Escape` clears a pending multi-selection, then closes
+  Settings if open, then hides the panel — it does each in its own
+  keypress, never more than one at a time.
+- **Click-outside to close**: losing focus (clicking another app) hides the
+  panel — opt out via Settings → "Hide when the panel loses focus".
 - **Duplicate hint**: a non-blocking inline note ("Already saved") appears
   while typing text that exactly matches an existing item — saving anyway
   is still one Enter away.
@@ -97,15 +119,32 @@ Accessibility — until then, double-Shift capture is inactive but the
   flips that just-saved item to a todo, without delaying the double-tap's own
   (instant) fire — see the `Fired::PromoteToTodo` path in `capture.rs`.
 - **Save notifications**: opt-in (off by default), with an optional sound —
-  see Settings → Notifications.
+  see Settings → Notifications. In `pnpm tauri dev`, macOS shows these under
+  Terminal's notification permission (Tauri's dev-mode identity workaround),
+  not shiftshift's — check System Settings → Notifications → Terminal if
+  nothing appears in dev.
+- **History** (Settings → History): a chronological log of what was created,
+  edited, bookmarked, converted, used (copied/opened), and deleted.
 - **Snippet templates**: type `/name arg1 arg2` in the capture input to
   expand a saved template. `{{var}}` placeholders fill positionally in
   first-appearance order (a repeated `{{name}}` reuses the same arg). Manage
-  templates from Settings.
+  templates from Settings; typing `/` shows matching commands and templates
+  as you type, `Tab` autocompletes the highlighted one.
 - **Markdown export**: writes a timestamped `.md` file (grouped by
-  Todo/Note/Link, todos as checkboxes) under the app data dir and opens it.
+  Todo/Note/Link/Image, todos as checkboxes, images as `![]()`) under the
+  app data dir and opens it.
 - **Link previews**: items detected as URLs render with a link icon and open
   in the default browser on click (via `@tauri-apps/plugin-shell`).
+- **Images**: `⌘Shift+I` (configurable) or Settings → Images → "Capture
+  image" saves whatever's on the system clipboard as a PNG under the app
+  data dir; the item renders as a thumbnail, and clicking it copies the
+  image back to the clipboard.
+- **Tray icon**: left-click toggles the panel; the menu's Show/Quit are the
+  only things that actually quit the app — Cmd+Q / Dock ▸ Quit are
+  intercepted (`RunEvent::ExitRequested` with `code: None`) so the panel
+  survives being "closed" the way a window with no title bar otherwise
+  couldn't recover from. Optional launch-at-login via
+  `tauri-plugin-autostart`.
 - **CLI capture** (`shift`): a companion binary that sends text to a running
   shiftshift instance over a local TCP port (`cli_protocol.rs`), so you can
   do `shift "buy milk"` or `git log -1 | shift` from a terminal. Requires the
@@ -115,13 +154,8 @@ Accessibility — until then, double-Shift capture is inactive but the
 
 ### Not (yet) implemented
 
-Flagged during the production-readiness pass but out of scope for it: sync
-backends (remote storage needs an auth UI, a background sync loop, and —
-per the conflict-resolution note in `store/mod.rs` — a real answer to
-concurrent-edit merging before it's worth building at all); a tray icon /
-close-to-tray / autostart wiring (the `tauri-plugin-autostart` dependency is
-already installed but unused); inline Markdown rendering in the item list;
-fractional manual reordering; a clipboard-watch auto-capture mode.
+Inline Markdown rendering in the item list (bold/italic/code within a
+row's text, cooper-style) — flagged, not attempted this pass.
 
 ## Testing
 
@@ -131,12 +165,15 @@ cargo test
 ```
 
 Covers the double-Shift and triple-tap gesture state machine (`mac_tap.rs`),
-the local SQLite store CRUD (`store/local.rs`), settings/template
-persistence, Markdown export formatting, the notification excerpt
-formatting, and the CLI's line-capture logic.
+the local SQLite store CRUD and fractional reordering (`store/local.rs`,
+`store/mod.rs`), settings/template persistence, Markdown export formatting,
+the notification excerpt formatting, the CLI's line-capture logic, and the
+S3 backend's config validation (44 tests — the S3 backend's actual network
+calls are not covered; see `store/s3.rs`'s module doc).
 
 Frontend logic (kind detection, template expansion, capture resolution, list
-filtering, duplicate detection, UI slash commands) has Vitest unit tests:
+filtering, duplicate detection, UI slash commands and autocomplete) has
+Vitest unit tests:
 
 ```bash
 pnpm test

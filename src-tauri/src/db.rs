@@ -1,18 +1,28 @@
 use std::sync::Arc;
 
-use crate::store::{LocalSqliteStore, Store};
+use crate::settings::Settings;
+use crate::store::{LocalSqliteStore, S3Store, Store};
 
-/// App-state wrapper around the active backend. Backend selection lives here
-/// (shiftshift's "pick a backend" model) rather than behind a runtime
-/// registry: today only `LocalSqliteStore` exists, so there is nothing to
-/// pick between yet. When a remote backend (atproto/S3-style, see
-/// shiftshift's prior art) ships, `open()` reads the choice from settings and
-/// constructs the matching `Arc<dyn Store>` — call sites never change.
+/// App-state wrapper around the active backend — reads the choice from
+/// `Settings::backend` (shiftshift's "pick a backend" model) and constructs
+/// the matching `Arc<dyn Store>`; call sites never know which one is live.
+/// Switching backends takes effect on next launch, not live — `settings.rs`
+/// documents that on the field itself.
 pub struct Db(pub Arc<dyn Store>);
 
 impl Db {
-    pub fn open(app_data_dir: &std::path::Path) -> Result<Self, String> {
+    /// Never fails just because S3 is misconfigured: an incomplete or wrong
+    /// config would otherwise `.expect()`-panic the whole app on startup
+    /// with no window ever shown to get back into Settings and fix it — so
+    /// this falls back to local storage instead, loudly, on stderr.
+    pub fn open(app_data_dir: &std::path::Path, settings: &Settings) -> Result<Self, String> {
         std::fs::create_dir_all(app_data_dir).map_err(|e| e.to_string())?;
+        if settings.backend == "s3" {
+            match S3Store::open(&settings.s3) {
+                Ok(store) => return Ok(Self(Arc::new(store))),
+                Err(e) => eprintln!("shiftshift: S3 backend unavailable ({e}), falling back to local storage"),
+            }
+        }
         let db_path = app_data_dir.join("shiftshift.sqlite3");
         let store = LocalSqliteStore::open(&db_path)?;
         Ok(Self(Arc::new(store)))

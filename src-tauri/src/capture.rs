@@ -5,9 +5,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{db, panel};
-#[cfg(not(target_os = "macos"))]
-use crate::settings;
+use crate::{db, panel, settings};
 
 /// Marker written to the clipboard before simulating copy, so "nothing was
 /// selected" can be told apart from "the same text was copied again".
@@ -37,6 +35,20 @@ pub enum Action {
     Capture,
     TogglePanel,
     None,
+}
+
+/// What happens when text is captured (double-shift, CLI, or clipboard-watch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureMode {
+    /// Saved straight to the store; the panel does not appear.
+    #[default]
+    Silent,
+    /// Saved, and the panel is raised so the result is visible immediately.
+    Open,
+    /// Not saved yet — the panel opens with the captured text prefilled in
+    /// the input, so the user can edit it before pressing Enter to save.
+    Draft,
 }
 
 impl Default for Bindings {
@@ -195,22 +207,38 @@ pub fn start_double_shift_listener(app: AppHandle) {
 /// Accelerators are user-configurable from the settings screen (persisted as
 /// `fallback_toggle`/`fallback_capture`); see `reregister_fallback_shortcuts`
 /// for changing them at runtime.
-pub fn register_fallback_shortcuts(app: &AppHandle, toggle: &str, capture: &str) -> Result<(), String> {
+pub fn register_fallback_shortcuts(app: &AppHandle, toggle: &str, capture: &str, image: &str) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
     let gs = app.global_shortcut();
-    gs.on_shortcut(toggle, |app, _shortcut, event| {
-        if event.state() == ShortcutState::Pressed {
-            panel::toggle(app);
-        }
-    })
-    .map_err(|e| format!("could not register fallback toggle shortcut {toggle:?}: {e}"))?;
-    gs.on_shortcut(capture, |app, _shortcut, event| {
-        if event.state() == ShortcutState::Pressed {
-            capture_selection(app);
-        }
-    })
-    .map_err(|e| format!("could not register fallback capture shortcut {capture:?}: {e}"))?;
+    // An empty accelerator means "disabled" — the user cleared it in
+    // Settings, not an accidental invalid string to reject.
+    if !toggle.is_empty() {
+        gs.on_shortcut(toggle, |app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                panel::toggle(app);
+            }
+        })
+        .map_err(|e| format!("could not register fallback toggle shortcut {toggle:?}: {e}"))?;
+    }
+    if !capture.is_empty() {
+        gs.on_shortcut(capture, |app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                capture_selection(app);
+            }
+        })
+        .map_err(|e| format!("could not register fallback capture shortcut {capture:?}: {e}"))?;
+    }
+    if !image.is_empty() {
+        gs.on_shortcut(image, |app, _shortcut, event| {
+            if event.state() == ShortcutState::Pressed {
+                if let Err(e) = crate::images::capture_clipboard_image(app) {
+                    eprintln!("shiftshift: image capture failed: {e}");
+                }
+            }
+        })
+        .map_err(|e| format!("could not register fallback image shortcut {image:?}: {e}"))?;
+    }
     Ok(())
 }
 
@@ -219,17 +247,16 @@ pub fn register_fallback_shortcuts(app: &AppHandle, toggle: &str, capture: &str)
 /// accelerator string never leaves the user with no fallback shortcuts at all.
 pub fn reregister_fallback_shortcuts(
     app: &AppHandle,
-    old_toggle: &str,
-    old_capture: &str,
-    new_toggle: &str,
-    new_capture: &str,
+    old: (&str, &str, &str),
+    new: (&str, &str, &str),
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-    register_fallback_shortcuts(app, new_toggle, new_capture)?;
+    register_fallback_shortcuts(app, new.0, new.1, new.2)?;
     let gs = app.global_shortcut();
-    let _ = gs.unregister(old_toggle);
-    let _ = gs.unregister(old_capture);
+    let _ = gs.unregister(old.0);
+    let _ = gs.unregister(old.1);
+    let _ = gs.unregister(old.2);
     Ok(())
 }
 
@@ -273,7 +300,7 @@ fn do_capture(app: &AppHandle) -> Result<(), String> {
 
     match captured {
         Some(text) => {
-            add_text_item(app, text.trim())?;
+            handle_captured_text(app, text.trim(), None)?;
         }
         None => {
             restore(&mut clip, old);
@@ -293,13 +320,34 @@ fn restore(clip: &mut arboard::Clipboard, old: Option<String>) {
     }
 }
 
-fn add_text_item(app: &AppHandle, text: &str) -> Result<(), String> {
+/// Applies the user's `CaptureMode`: the single place every capture source
+/// (double-shift gesture, CLI, clipboard-watch) routes through, so they all
+/// respect the same "silent / open / draft" setting.
+///
+/// Also seeds `LAST_KNOWN_CLIPBOARD` (see `clipboard_watch.rs`) with the
+/// saved text: whatever backend just captured this became the clipboard
+/// contents at some point on the way in, and treating it as "already seen"
+/// stops clipboard-watch from re-capturing it as a second, duplicate item.
+pub(crate) fn handle_captured_text(app: &AppHandle, text: &str, source_app: Option<String>) -> Result<(), String> {
+    crate::clipboard_watch::note_own_write(text);
+
+    let mode = app.state::<settings::SettingsState>().0.lock().unwrap().capture_mode;
+    if mode == CaptureMode::Draft {
+        let _ = app.emit("draft-capture", text);
+        panel::show(app);
+        return Ok(());
+    }
+
     let db = app.state::<db::Db>();
-    let item = db.0.add_item(text, crate::store::ItemKind::Note, None)?;
+    let item = db.0.add_item(text, crate::store::ItemKind::Note, source_app)?;
     *LAST_CAPTURE.lock().unwrap() = Some((item.id.clone(), Instant::now()));
+    let _ = db.0.log_event(Some(&item.id), "created", Some(&item.text));
     let _ = app.emit("refresh", ());
     let _ = app.emit("captured", ());
     crate::notify::notify_captured(app, &item);
+    if mode == CaptureMode::Open {
+        panel::show(app);
+    }
     Ok(())
 }
 

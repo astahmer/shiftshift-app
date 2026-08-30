@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection};
 
-use super::{Item, ItemKind, Store};
+use super::{HistoryEntry, Item, ItemKind, MoveDirection, Store};
 
 pub struct LocalSqliteStore {
     conn: Mutex<Connection>,
@@ -21,6 +21,13 @@ impl LocalSqliteStore {
                 rank REAL NOT NULL DEFAULT 0,
                 source_app TEXT,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS history (
+                id TEXT PRIMARY KEY,
+                item_id TEXT,
+                action TEXT NOT NULL,
+                detail TEXT,
+                at TEXT NOT NULL
             );",
         )
         .map_err(|e| e.to_string())?;
@@ -53,6 +60,7 @@ impl LocalSqliteStore {
             kind: match kind_str.as_str() {
                 "todo" => ItemKind::Todo,
                 "link" => ItemKind::Link,
+                "image" => ItemKind::Image,
                 _ => ItemKind::Note,
             },
             text: row.get("text")?,
@@ -70,6 +78,7 @@ fn kind_str(kind: ItemKind) -> &'static str {
         ItemKind::Note => "note",
         ItemKind::Todo => "todo",
         ItemKind::Link => "link",
+        ItemKind::Image => "image",
     }
 }
 
@@ -77,7 +86,12 @@ impl Store for LocalSqliteStore {
     fn list_items(&self) -> Result<Vec<Item>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare("SELECT * FROM items ORDER BY bookmarked DESC, rank DESC, created_at DESC")
+            // rowid as the final tiebreaker: rank/created_at are both
+            // millisecond-resolution timestamps and can tie for items
+            // inserted in rapid succession (a fast test, or several CLI
+            // lines piped in one call), which would otherwise make sort
+            // order nondeterministic between runs.
+            .prepare("SELECT * FROM items ORDER BY bookmarked DESC, rank DESC, created_at DESC, rowid DESC")
             .map_err(|e| e.to_string())?;
         let items = stmt
             .query_map([], Self::row_to_item)
@@ -88,17 +102,25 @@ impl Store for LocalSqliteStore {
     }
 
     fn add_item(&self, text: &str, kind: ItemKind, source_app: Option<String>) -> Result<Item, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        // Derived from the current max rather than a wall-clock timestamp:
+        // items inserted within the same millisecond (a fast test, several
+        // CLI lines piped in one call, clipboard-watch catching up) would
+        // otherwise tie, making sort order and move_item's neighbor-midpoint
+        // math silently no-op against equal ranks.
+        let max_rank: f64 = conn
+            .query_row("SELECT COALESCE(MAX(rank), 0) FROM items", [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
         let item = Item {
             id: uuid::Uuid::new_v4().to_string(),
             kind,
             text: text.to_string(),
             done: false,
             bookmarked: false,
-            rank: chrono::Utc::now().timestamp_millis() as f64,
+            rank: max_rank + 1000.0,
             source_app,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO items (id, kind, text, done, bookmarked, rank, source_app, created_at)
              VALUES (?1, ?2, ?3, 0, 0, ?4, ?5, ?6)",
@@ -155,6 +177,48 @@ impl Store for LocalSqliteStore {
         conn.execute("DELETE FROM items WHERE done = 1", [])
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    fn move_item(&self, id: &str, direction: MoveDirection) -> Result<(), String> {
+        let items = self.list_items()?;
+        let Some(new_rank) = super::compute_move_rank(&items, id, direction) else {
+            return Ok(()); // already at that edge, or id not found
+        };
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("UPDATE items SET rank = ?1 WHERE id = ?2", params![new_rank, id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn log_event(&self, item_id: Option<&str>, action: &str, detail: Option<&str>) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO history (id, item_id, action, detail, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![uuid::Uuid::new_v4().to_string(), item_id, action, detail, chrono::Utc::now().to_rfc3339()],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn list_history(&self, limit: u32) -> Result<Vec<HistoryEntry>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT * FROM history ORDER BY at DESC LIMIT ?1")
+            .map_err(|e| e.to_string())?;
+        let entries = stmt
+            .query_map(params![limit], |row| {
+                Ok(HistoryEntry {
+                    id: row.get("id")?,
+                    item_id: row.get("item_id")?,
+                    action: row.get("action")?,
+                    detail: row.get("detail")?,
+                    at: row.get("at")?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(entries)
     }
 }
 
@@ -248,5 +312,61 @@ mod tests {
         let item = s.add_item("gone", ItemKind::Note, None).unwrap();
         s.delete_item(&item.id).unwrap();
         assert!(s.list_items().unwrap().is_empty());
+    }
+
+    #[test]
+    fn move_up_swaps_with_the_previous_item() {
+        let s = store();
+        let a = s.add_item("a", ItemKind::Note, None).unwrap(); // rank order after inserts: c, b, a (newest first)
+        let b = s.add_item("b", ItemKind::Note, None).unwrap();
+        let c = s.add_item("c", ItemKind::Note, None).unwrap();
+        // list order is c, b, a; move a (last) up one slot -> c, a, b
+        s.move_item(&a.id, MoveDirection::Up).unwrap();
+        let ids: Vec<String> = s.list_items().unwrap().into_iter().map(|i| i.id).collect();
+        assert_eq!(ids, vec![c.id, a.id, b.id]);
+    }
+
+    #[test]
+    fn move_down_swaps_with_the_next_item() {
+        let s = store();
+        let a = s.add_item("a", ItemKind::Note, None).unwrap();
+        let b = s.add_item("b", ItemKind::Note, None).unwrap();
+        let c = s.add_item("c", ItemKind::Note, None).unwrap();
+        // list order is c, b, a; move c (first) down one slot -> b, c, a
+        s.move_item(&c.id, MoveDirection::Down).unwrap();
+        let ids: Vec<String> = s.list_items().unwrap().into_iter().map(|i| i.id).collect();
+        assert_eq!(ids, vec![b.id, c.id, a.id]);
+    }
+
+    #[test]
+    fn move_up_at_the_top_is_a_no_op() {
+        let s = store();
+        let a = s.add_item("a", ItemKind::Note, None).unwrap();
+        let b = s.add_item("b", ItemKind::Note, None).unwrap();
+        s.move_item(&b.id, MoveDirection::Up).unwrap(); // b is already first
+        let ids: Vec<String> = s.list_items().unwrap().into_iter().map(|i| i.id).collect();
+        assert_eq!(ids, vec![b.id, a.id]);
+    }
+
+    #[test]
+    fn log_event_and_list_history_round_trip_newest_first() {
+        let s = store();
+        let item = s.add_item("thing", ItemKind::Note, None).unwrap();
+        s.log_event(Some(&item.id), "created", Some("thing")).unwrap();
+        s.log_event(Some(&item.id), "bookmarked", None).unwrap();
+        let history = s.list_history(10).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].action, "bookmarked");
+        assert_eq!(history[1].action, "created");
+        assert_eq!(history[1].detail.as_deref(), Some("thing"));
+    }
+
+    #[test]
+    fn list_history_respects_the_limit() {
+        let s = store();
+        for i in 0..5 {
+            s.log_event(None, &format!("event-{i}"), None).unwrap();
+        }
+        assert_eq!(s.list_history(2).unwrap().len(), 2);
     }
 }

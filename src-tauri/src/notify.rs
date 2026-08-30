@@ -30,6 +30,7 @@ pub fn notify_captured(app: &AppHandle, item: &Item) {
         crate::store::ItemKind::Todo => "Todo saved",
         crate::store::ItemKind::Link => "Link saved",
         crate::store::ItemKind::Note => "Note saved",
+        crate::store::ItemKind::Image => "Image saved",
     };
     let mut builder = app.notification().builder().title(title).body(excerpt(&item.text));
     if settings.notify_sound {

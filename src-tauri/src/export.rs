@@ -8,11 +8,13 @@ pub fn to_markdown(items: &[Item]) -> String {
     let todos: Vec<&Item> = items.iter().filter(|i| i.kind == ItemKind::Todo).collect();
     let notes: Vec<&Item> = items.iter().filter(|i| i.kind == ItemKind::Note).collect();
     let links: Vec<&Item> = items.iter().filter(|i| i.kind == ItemKind::Link).collect();
+    let images: Vec<&Item> = items.iter().filter(|i| i.kind == ItemKind::Image).collect();
 
     let mut out = String::from("# shiftshift export\n\n");
     append_section(&mut out, "Todos", &todos, |item| format!("- [{}] {}", if item.done { "x" } else { " " }, item.text));
     append_section(&mut out, "Notes", &notes, |item| format!("- {}", item.text));
     append_section(&mut out, "Links", &links, |item| format!("- {}", item.text));
+    append_section(&mut out, "Images", &images, |item| format!("![]({})", item.text));
     out
 }
 
@@ -63,5 +65,12 @@ mod tests {
         assert!(md.contains("## Todos\n\n- [ ] buy milk\n- [x] call mom\n"));
         assert!(md.contains("## Notes\n\n- idea\n"));
         assert!(md.contains("## Links\n\n- https://example.com\n"));
+    }
+
+    #[test]
+    fn images_render_as_markdown_image_syntax() {
+        let items = vec![item(ItemKind::Image, "/data/images/abc.png", false)];
+        let md = to_markdown(&items);
+        assert!(md.contains("## Images\n\n![](/data/images/abc.png)\n"));
     }
 }

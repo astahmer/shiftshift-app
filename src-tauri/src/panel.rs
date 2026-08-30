@@ -15,9 +15,9 @@ pub fn toggle(app: &AppHandle) {
     }
 }
 
-/// Reserved for tray-menu / CLI-capture callers that need to raise the panel
-/// without toggling it shut if already open.
-#[allow(dead_code)]
+/// Raises the panel without toggling it shut if already open — used by the
+/// tray menu and by capture modes that want the panel visible (`open`/`draft`
+/// in `capture::handle_captured_text`).
 pub fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(PANEL_LABEL) {
         let _ = window.show();

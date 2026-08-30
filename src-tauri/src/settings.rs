@@ -8,9 +8,23 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::capture::Bindings;
+use crate::capture::{Bindings, CaptureMode};
 
 const FILE_NAME: &str = "settings.json";
+
+pub const DEFAULT_FALLBACK_TOGGLE: &str = "CmdOrCtrl+Shift+Space";
+pub const DEFAULT_FALLBACK_CAPTURE: &str = "CmdOrCtrl+Shift+C";
+pub const DEFAULT_FALLBACK_IMAGE: &str = "CmdOrCtrl+Shift+I";
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct S3Settings {
+    pub endpoint: String,
+    pub bucket: String,
+    pub region: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub prefix: String,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -23,9 +37,25 @@ pub struct Settings {
     pub notify_sound: bool,
     /// Tauri accelerator strings (e.g. "CmdOrCtrl+Shift+Space") for the
     /// fallback global shortcuts, used where the raw double-shift hook is
-    /// unavailable or denied.
+    /// unavailable or denied. Empty string means "disabled, don't register".
     pub fallback_toggle: String,
     pub fallback_capture: String,
+    /// Saves whatever image is on the clipboard (see `images.rs`) — a
+    /// dedicated shortcut rather than folded into `fallback_capture`,
+    /// since that one simulates a text-copy chord that would clobber a
+    /// clipboard image before it could be read.
+    pub fallback_image: String,
+    pub capture_mode: CaptureMode,
+    /// Hide the panel when it loses focus (e.g. the user clicks elsewhere).
+    pub hide_on_blur: bool,
+    /// Auto-capture everything copied to the system clipboard, own writes
+    /// excluded (shiftshift's clipboard-watch).
+    pub clipboard_watch: bool,
+    pub launch_at_login: bool,
+    /// "local" or "s3" — which `Store` backend `Db::open` constructs.
+    /// Switching requires a restart (no live backend hot-swap).
+    pub backend: String,
+    pub s3: S3Settings,
 }
 
 impl Default for Settings {
@@ -35,8 +65,15 @@ impl Default for Settings {
             theme: "tokyo-night".to_string(),
             notify_on_save: false,
             notify_sound: true,
-            fallback_toggle: "CmdOrCtrl+Shift+Space".to_string(),
-            fallback_capture: "CmdOrCtrl+Shift+C".to_string(),
+            fallback_toggle: DEFAULT_FALLBACK_TOGGLE.to_string(),
+            fallback_capture: DEFAULT_FALLBACK_CAPTURE.to_string(),
+            fallback_image: DEFAULT_FALLBACK_IMAGE.to_string(),
+            capture_mode: CaptureMode::default(),
+            hide_on_blur: true,
+            clipboard_watch: false,
+            launch_at_login: false,
+            backend: "local".to_string(),
+            s3: S3Settings::default(),
         }
     }
 }
