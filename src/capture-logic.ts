@@ -105,3 +105,29 @@ export function filterItems(items: Item[], query: string): Item[] {
 		return !text || item.text.toLowerCase().includes(text);
 	});
 }
+
+export const BUILTIN_COMMANDS: Array<{ name: string; hint: string }> = [
+	{ name: "todo", hint: "Save as a todo" },
+	{ name: "settings", hint: "Open settings" },
+	{ name: "light", hint: "Switch to this theme's light sibling" },
+	{ name: "dark", hint: "Switch to this theme's dark sibling" },
+	{ name: "theme", hint: "Switch to a specific theme by name" },
+];
+
+export interface SlashSuggestion {
+	name: string;
+	hint: string;
+	kind: "builtin" | "template";
+}
+
+/**
+ * What `/`-prefixed input could complete to, filtered by the first word
+ * typed so far. Trailing args (e.g. "/standup shipped it") don't narrow the
+ * match further — there's only one "standup", args or not.
+ */
+export function matchSlashSuggestions(query: string, templates: Template[]): SlashSuggestion[] {
+	const prefix = (query.slice(1).split(/\s+/)[0] ?? "").toLowerCase();
+	const builtins: SlashSuggestion[] = BUILTIN_COMMANDS.map((c) => ({ ...c, kind: "builtin" }));
+	const fromTemplates: SlashSuggestion[] = templates.map((t) => ({ name: t.name, hint: t.body, kind: "template" }));
+	return [...builtins, ...fromTemplates].filter((s) => s.name.toLowerCase().startsWith(prefix));
+}

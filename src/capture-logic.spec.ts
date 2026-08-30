@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectKind, expandTemplate, filterItems, findDuplicate, parseUiCommand, resolveCapture } from "./capture-logic";
+import { detectKind, expandTemplate, filterItems, findDuplicate, matchSlashSuggestions, parseUiCommand, resolveCapture } from "./capture-logic";
 import type { Item, Template } from "./store";
 
 function item(overrides: Partial<Item> & Pick<Item, "text">): Item {
@@ -144,5 +144,29 @@ describe("filterItems", () => {
 
 	it("returns everything for an empty query", () => {
 		expect(filterItems(items, "")).toEqual(items);
+	});
+});
+
+describe("matchSlashSuggestions", () => {
+	const templates: Template[] = [{ id: "1", name: "standup", body: "did: {{a}}" }];
+
+	it("matches builtins and templates by prefix", () => {
+		const names = matchSlashSuggestions("/s", templates).map((s) => s.name);
+		expect(names).toEqual(expect.arrayContaining(["settings", "standup"]));
+		expect(names).not.toContain("todo");
+	});
+
+	it("keeps matching the same command once args are typed", () => {
+		const names = matchSlashSuggestions("/standup shipped it", templates).map((s) => s.name);
+		expect(names).toEqual(["standup"]);
+	});
+
+	it("returns everything for a bare slash", () => {
+		const names = matchSlashSuggestions("/", templates).map((s) => s.name);
+		expect(names).toEqual(expect.arrayContaining(["todo", "settings", "light", "dark", "theme", "standup"]));
+	});
+
+	it("returns nothing when no command matches the prefix", () => {
+		expect(matchSlashSuggestions("/zzz", templates)).toEqual([]);
 	});
 });

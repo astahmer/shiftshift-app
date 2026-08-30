@@ -330,6 +330,42 @@ body {
 	text-align: center;
 }
 
+.shortcut-clear {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	background: none;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	border-radius: 6px;
+	font-size: 14px;
+}
+
+.shortcut-clear:hover {
+	color: var(--fg);
+	background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+
+.history-row {
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+}
+
+.history-time {
+	font-size: 10.5px;
+	color: var(--muted);
+}
+
+.history-detail {
+	font-size: 12.5px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 100%;
+}
+
 .template-row {
 	justify-content: space-between;
 }
@@ -385,6 +421,14 @@ body {
 	background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+.item-row.multi-selected {
+	background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.item-row.multi-selected.selected {
+	background: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
 /* Leading icon slot: always present, so every row has the same rhythm. */
 .item-icon {
 	flex: none;
@@ -429,6 +473,30 @@ body {
 	min-width: 0;
 }
 
+.item-thumb {
+	flex: 1;
+	height: 28px;
+	max-width: 120px;
+	object-fit: cover;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.suggestion-row .item-text {
+	flex: none;
+	cursor: default;
+	font-weight: 600;
+}
+
+.suggestion-hint {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--muted);
+	font-size: 12px;
+}
+
 .item-row[data-done="true"] .item-text {
 	color: var(--muted);
 	text-decoration: line-through;
@@ -459,23 +527,40 @@ body {
 }
 
 .item-action {
-	width: 24px;
+	min-width: 24px;
 	height: 24px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	gap: 4px;
+	padding: 0 4px;
 	background: none;
 	border: none;
 	color: var(--muted);
 	cursor: pointer;
 	font-size: 12px;
 	border-radius: 6px;
+	white-space: nowrap;
 }
 
 .item-action:hover,
 .item-action:focus-visible {
 	color: var(--fg);
 	background: color-mix(in srgb, var(--fg) 12%, transparent);
+}
+
+/* Shortcut hints (like shiftshift's help footer, but inline on the row):
+   only shown once a row is the keyboard cursor, not on plain mouse hover,
+   so the mouse-only list stays uncluttered. */
+.item-action-hint {
+	display: none;
+	font-size: 10px;
+	font-family: ui-monospace, monospace;
+	color: var(--muted);
+}
+
+.item-row.selected .item-action-hint {
+	display: inline;
 }
 
 .item-bookmark {
