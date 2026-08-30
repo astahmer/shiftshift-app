@@ -7,6 +7,7 @@ mod custom_themes;
 mod db;
 mod export;
 mod images;
+mod link_preview;
 #[cfg(target_os = "macos")]
 mod mac_tap;
 mod notify;
@@ -41,6 +42,8 @@ pub fn run() {
             let fallback_capture = settings.fallback_capture.clone();
             let fallback_image = settings.fallback_image.clone();
             let launch_at_login = settings.launch_at_login;
+            let show_in_dock = settings.show_in_dock;
+            let show_tray_icon = settings.show_tray_icon;
             app.manage(settings::SettingsState(std::sync::Mutex::new(settings)));
 
             let templates = templates::load(&app_data_dir);
@@ -55,7 +58,9 @@ pub fn run() {
             }
             cli_server::start(handle.clone());
             clipboard_watch::start(handle.clone());
-            tray::build(app)?;
+            tray::apply(&handle, show_tray_icon)?;
+            #[cfg(target_os = "macos")]
+            let _ = handle.set_dock_visibility(show_in_dock);
 
             // Sync the OS-level login-item registration in case it drifted
             // (e.g. the setting was toggled, then the app was reinstalled).
@@ -85,11 +90,14 @@ pub fn run() {
             commands::delete_item,
             commands::clear_completed,
             commands::move_item,
+            commands::restore_item,
+            commands::set_rank,
             commands::list_history,
             commands::log_used,
             commands::note_own_clipboard_write,
             commands::capture_clipboard_image,
             commands::copy_image_to_clipboard,
+            commands::fetch_link_preview,
             commands::get_settings,
             commands::set_settings,
             commands::export_markdown,

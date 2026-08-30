@@ -146,6 +146,14 @@ pub trait Store: Send + Sync {
     fn delete_item(&self, id: &str) -> Result<(), String>;
     fn clear_completed(&self) -> Result<(), String>;
     fn move_item(&self, id: &str, direction: MoveDirection) -> Result<(), String>;
+    /// Re-inserts a full item as-is (same id/rank/timestamps) — the undo side
+    /// of a delete, and the redo side of an add. Never called with a
+    /// hand-built `Item`; always one previously returned by this trait.
+    fn restore_item(&self, item: Item) -> Result<(), String>;
+    /// Sets a rank directly rather than computing a relative move — undo/redo
+    /// for `move_item`, which only exposes "one slot up/down", not "back to
+    /// exactly where it was".
+    fn set_rank(&self, id: &str, rank: f64) -> Result<(), String>;
     fn log_event(&self, item_id: Option<&str>, action: &str, detail: Option<&str>) -> Result<(), String>;
     fn list_history(&self, limit: u32) -> Result<Vec<HistoryEntry>, String>;
 }

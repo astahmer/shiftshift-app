@@ -151,6 +151,16 @@ impl Store for S3Store {
         self.put_item(&item)
     }
 
+    fn restore_item(&self, item: Item) -> Result<(), String> {
+        self.put_item(&item)
+    }
+
+    fn set_rank(&self, id: &str, rank: f64) -> Result<(), String> {
+        let mut item = self.get_item(id)?;
+        item.rank = rank;
+        self.put_item(&item)
+    }
+
     fn log_event(&self, item_id: Option<&str>, action: &str, detail: Option<&str>) -> Result<(), String> {
         let entry = HistoryEntry {
             id: uuid::Uuid::new_v4().to_string(),

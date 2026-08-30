@@ -78,6 +78,26 @@ pub fn move_item(db: State<Db>, app: AppHandle, id: String, direction: MoveDirec
     Ok(())
 }
 
+/// Undo side of a delete, redo side of an add — see `Store::restore_item`'s
+/// doc comment for why this takes a full previously-returned `Item` rather
+/// than reconstructing one.
+#[tauri::command]
+pub fn restore_item(db: State<Db>, app: AppHandle, item: Item) -> Result<(), String> {
+    db.0.restore_item(item.clone())?;
+    let _ = db.0.log_event(Some(&item.id), "restored", Some(&item.text));
+    let _ = app.emit("refresh", ());
+    Ok(())
+}
+
+/// Undo/redo for `move_item` — sets an exact rank rather than "one slot
+/// up/down", so reordering can be reverted precisely.
+#[tauri::command]
+pub fn set_rank(db: State<Db>, app: AppHandle, id: String, rank: f64) -> Result<(), String> {
+    db.0.set_rank(&id, rank)?;
+    let _ = app.emit("refresh", ());
+    Ok(())
+}
+
 #[tauri::command]
 pub fn list_history(db: State<Db>, limit: u32) -> Result<Vec<HistoryEntry>, String> {
     db.0.list_history(limit)
@@ -109,6 +129,11 @@ pub fn copy_image_to_clipboard(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn fetch_link_preview(url: String) -> Result<crate::link_preview::LinkPreview, String> {
+    crate::link_preview::fetch(&url)
+}
+
+#[tauri::command]
 pub fn get_settings(settings: State<SettingsState>) -> Settings {
     settings.0.lock().unwrap().clone()
 }
@@ -133,6 +158,17 @@ pub fn set_settings(settings: State<SettingsState>, app: AppHandle, next: Settin
         let result = if next.launch_at_login { app.autolaunch().enable() } else { app.autolaunch().disable() };
         if let Err(e) = result {
             eprintln!("shiftshift: could not update login-item registration: {e}");
+        }
+    }
+    if next.show_in_dock != previous.show_in_dock {
+        #[cfg(target_os = "macos")]
+        if let Err(e) = app.set_dock_visibility(next.show_in_dock) {
+            eprintln!("shiftshift: could not update Dock visibility: {e}");
+        }
+    }
+    if next.show_tray_icon != previous.show_tray_icon {
+        if let Err(e) = crate::tray::apply(&app, next.show_tray_icon) {
+            eprintln!("shiftshift: could not update tray icon: {e}");
         }
     }
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;

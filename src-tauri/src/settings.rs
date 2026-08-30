@@ -61,6 +61,11 @@ pub struct Settings {
     /// since the canonical DB order already IS "manual" (rank-based).
     /// "manual" | "newest" | "oldest" | "az" | "za".
     pub sort_mode: String,
+    /// Both default to `false` — this app is meant to be invoked purely via
+    /// the double-shift gesture / fallback shortcuts, so "no dock icon, no
+    /// menu-bar icon" is the intended steady state, not an oversight.
+    pub show_in_dock: bool,
+    pub show_tray_icon: bool,
 }
 
 impl Default for Settings {
@@ -80,6 +85,8 @@ impl Default for Settings {
             backend: "local".to_string(),
             s3: S3Settings::default(),
             sort_mode: "manual".to_string(),
+            show_in_dock: false,
+            show_tray_icon: false,
         }
     }
 }

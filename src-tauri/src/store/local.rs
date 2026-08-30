@@ -203,6 +203,32 @@ impl Store for LocalSqliteStore {
         Ok(())
     }
 
+    fn restore_item(&self, item: Item) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO items (id, kind, text, done, bookmarked, rank, source_app, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                item.id,
+                kind_str(item.kind),
+                item.text,
+                item.done as i64,
+                item.bookmarked as i64,
+                item.rank,
+                item.source_app,
+                item.created_at,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn set_rank(&self, id: &str, rank: f64) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("UPDATE items SET rank = ?1 WHERE id = ?2", params![rank, id]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn log_event(&self, item_id: Option<&str>, action: &str, detail: Option<&str>) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
@@ -325,6 +351,29 @@ mod tests {
         let item = s.add_item("gone", ItemKind::Note, None).unwrap();
         s.delete_item(&item.id).unwrap();
         assert!(s.list_items().unwrap().is_empty());
+    }
+
+    #[test]
+    fn restore_item_brings_back_a_deleted_item_with_the_same_id() {
+        let s = store();
+        let item = s.add_item("undo me", ItemKind::Todo, None).unwrap();
+        s.toggle_bookmarked(&item.id).unwrap();
+        let snapshot = s.list_items().unwrap()[0].clone();
+        s.delete_item(&item.id).unwrap();
+        assert!(s.list_items().unwrap().is_empty());
+        s.restore_item(snapshot).unwrap();
+        let items = s.list_items().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, item.id);
+        assert!(items[0].bookmarked);
+    }
+
+    #[test]
+    fn set_rank_sets_an_exact_value() {
+        let s = store();
+        let item = s.add_item("reorder me", ItemKind::Note, None).unwrap();
+        s.set_rank(&item.id, 42.5).unwrap();
+        assert_eq!(s.list_items().unwrap()[0].rank, 42.5);
     }
 
     #[test]
