@@ -192,10 +192,15 @@
 	   boosted saturation (the actual "frosted glass" trick: without it, a
 	   heavy blur just looks muddy/gray) on both the panel and every
 	   inner "card" (rows/inputs), not only the outer shell. */
-	--bg-alpha: 24%;
-	--row-alpha: 55%;
-	--backdrop-blur: 32px;
-	--backdrop-saturate: 200%;
+	--bg-alpha: 20%;
+	--row-alpha: 45%;
+	/* More blur + less saturation boost than an earlier pass — over a busy,
+	   saturated background (a colorful wallpaper or app behind the panel),
+	   a heavy saturate() amplifies whatever detail survives the blur into
+	   a muddy smear instead of a clean frosted look; more blur smooths that
+	   detail out first, so there's less for the saturation boost to grab. */
+	--backdrop-blur: 44px;
+	--backdrop-saturate: 150%;
 	--radius: 20px;
 	--radius-sm: 12px;
 	--shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
@@ -241,7 +246,7 @@
 	--accent: #a1552f;
 	--accent-fg: #f6f1e6;
 	--border: #d9cdb4;
-	--bg-alpha: 97%;
+	--bg-alpha: 90%;
 	--backdrop-blur: 0px;
 	--radius: 10px;
 	--radius-sm: 4px;
@@ -288,8 +293,9 @@
 	--accent: #ff6363;
 	--accent-fg: #141414;
 	--border: #2b2b2b;
-	--bg-alpha: 92%;
-	--backdrop-blur: 0px;
+	--bg-alpha: 65%;
+	--row-alpha: 75%;
+	--backdrop-blur: 20px;
 	--radius: 14px;
 	--radius-sm: 8px;
 	--shadow: 0 20px 45px rgba(0, 0, 0, 0.5);
@@ -308,8 +314,9 @@
 	--accent: #5865f2;
 	--accent-fg: #ffffff;
 	--border: #1e1f22;
-	--bg-alpha: 94%;
-	--backdrop-blur: 0px;
+	--bg-alpha: 80%;
+	--row-alpha: 85%;
+	--backdrop-blur: 12px;
 	--radius: 12px;
 	--radius-sm: 6px;
 	--shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
@@ -331,9 +338,14 @@
 	--radius: 16px;
 	--radius-sm: 10px;
 	--panel-border-width: 1px;
-	--bg-alpha: 90%;
-	--row-alpha: 100%;
-	--backdrop-blur: 0px;
+	/* ~50% by default across every plain palette theme (Tokyo Night,
+	   Dracula, Nord, ...) rather than the near-opaque 90% this used to be —
+	   paired with a bit of blur so it reads as "frosted", not just dim.
+	   Specialty themes above override a subset of this per their own look
+	   (Neobrutalism/Win95 stay fully opaque; Glass goes much further). */
+	--bg-alpha: 50%;
+	--row-alpha: 85%;
+	--backdrop-blur: 18px;
 	--backdrop-saturate: 100%;
 	--shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
 	/* Small-element shadow (buttons/inputs/rows) — separate from `--shadow`
@@ -397,7 +409,7 @@ button:active {
 	padding: 12px;
 	height: 100vh;
 	position: relative;
-	background: color-mix(in srgb, var(--bg) var(--bg-alpha, 90%), transparent);
+	background: color-mix(in srgb, var(--bg) var(--bg-alpha, 50%), transparent);
 	border-radius: var(--radius, 16px);
 	border: var(--panel-border-width, 1px) solid var(--border);
 	box-shadow: var(--shadow, 0 16px 40px rgba(0, 0, 0, 0.35));
@@ -618,6 +630,25 @@ button:active {
 
 .template-form input {
 	flex: 1;
+}
+
+.excluded-apps-row {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 6px;
+}
+
+.excluded-apps-textarea {
+	width: 100%;
+	min-height: 70px;
+	resize: vertical;
+	background: var(--bg);
+	color: var(--fg);
+	font-family: var(--font-family);
+	font-size: 12.5px;
+	border: var(--panel-border-width, 1px) solid var(--border);
+	border-radius: calc(var(--radius-sm, 10px) * 0.6);
+	padding: 6px 8px;
 }
 
 .custom-theme-form {

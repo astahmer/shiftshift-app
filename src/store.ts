@@ -45,6 +45,10 @@ export interface Settings {
 	folder_path: string;
 	/** Overrides the active theme's own background opacity when > 0; 0 means "use the theme's default". */
 	panel_opacity: number;
+	/** App names clipboard-watch never auto-captures from (case-insensitive substring match) — password managers by default. */
+	excluded_apps: string[];
+	/** Encrypts the local SQLite store at rest (SQLCipher). Restart required to take effect. */
+	encrypt_local_storage: boolean;
 }
 
 export interface Template {

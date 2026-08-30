@@ -1556,7 +1556,7 @@ function buildOpacityRow(current: Settings): HTMLElement {
 	slider.type = "range";
 	slider.min = "15";
 	slider.max = "100";
-	slider.value = String(current.panel_opacity > 0 ? current.panel_opacity : 90);
+	slider.value = String(current.panel_opacity > 0 ? current.panel_opacity : 50);
 	slider.disabled = current.panel_opacity === 0;
 	slider.oninput = () => {
 		if (settings) {
@@ -1573,7 +1573,7 @@ function buildOpacityRow(current: Settings): HTMLElement {
 	const resetBtn = document.createElement("button");
 	resetBtn.textContent = current.panel_opacity === 0 ? "Override theme opacity" : "Use theme default";
 	resetBtn.onclick = async () => {
-		const next = { ...current, panel_opacity: current.panel_opacity === 0 ? 90 : 0 };
+		const next = { ...current, panel_opacity: current.panel_opacity === 0 ? 50 : 0 };
 		settings = next;
 		applyTheme(next.theme);
 		await Store.setSettings(next);
@@ -1655,6 +1655,34 @@ function buildBehaviorRows(current: Settings): HTMLElement[] {
 		),
 		buildCheckboxRow("Launch at login", current.launch_at_login, false, (checked) => ({ launch_at_login: checked })),
 	];
+}
+
+/** One app name per line — parsed/joined on blur rather than per-keystroke, since a half-typed name shouldn't affect matching. */
+function buildExcludedAppsRow(current: Settings): HTMLElement {
+	const row = document.createElement("div");
+	row.className = "settings-row excluded-apps-row";
+
+	const label = document.createElement("label");
+	label.textContent = "Never auto-capture clipboard from (one app name per line)";
+	row.appendChild(label);
+
+	const textarea = document.createElement("textarea");
+	textarea.className = "excluded-apps-textarea";
+	textarea.value = current.excluded_apps.join("\n");
+	textarea.onblur = async () => {
+		const next = {
+			...current,
+			excluded_apps: textarea.value
+				.split("\n")
+				.map((s) => s.trim())
+				.filter(Boolean),
+		};
+		settings = next;
+		await Store.setSettings(next);
+	};
+	row.appendChild(textarea);
+
+	return row;
 }
 
 /** Both default off: this app is meant to be summoned purely via the double-shift gesture / fallback shortcuts, not alt-tabbed to or clicked on. */
@@ -1942,11 +1970,11 @@ function buildSyncRows(current: Settings): HTMLElement[] {
 		const row = document.createElement("div");
 		row.className = "settings-row";
 		const labelEl = document.createElement("label");
-		labelEl.textContent = "Folder path (e.g. ~/Library/Mobile Documents/com~apple~CloudDocs/shiftshift)";
+		labelEl.textContent = "Folder path";
 		row.appendChild(labelEl);
 		const pathInput = document.createElement("input");
 		pathInput.type = "text";
-		pathInput.placeholder = "/Users/you/Library/Mobile Documents/.../shiftshift";
+		pathInput.placeholder = "~/Library/Mobile Documents/com~apple~CloudDocs/shiftshift";
 		pathInput.value = current.folder_path;
 		pathInput.onchange = async () => {
 			const next = { ...current, folder_path: pathInput.value };
@@ -1955,6 +1983,27 @@ function buildSyncRows(current: Settings): HTMLElement[] {
 		};
 		row.appendChild(pathInput);
 		rows.push(row);
+
+		// The friendliest sync option for a non-technical user: no account
+		// setup, no API keys — just a folder inside iCloud Drive, which is
+		// already syncing on every Mac signed into iCloud. `~` is expanded
+		// backend-side (see `store/folder.rs::expand_tilde`), so this can
+		// just be the literal path string.
+		const icloudRow = document.createElement("div");
+		icloudRow.className = "settings-row";
+		const icloudLabel = document.createElement("label");
+		icloudLabel.textContent = "Already signed into iCloud? One click, no setup:";
+		icloudRow.appendChild(icloudLabel);
+		const icloudBtn = document.createElement("button");
+		icloudBtn.textContent = "Use iCloud Drive";
+		icloudBtn.onclick = async () => {
+			const next = { ...current, folder_path: "~/Library/Mobile Documents/com~apple~CloudDocs/shiftshift" };
+			settings = next;
+			await Store.setSettings(next);
+			await openSettings();
+		};
+		icloudRow.appendChild(icloudBtn);
+		rows.push(icloudRow);
 	}
 	return rows;
 }
@@ -2159,6 +2208,7 @@ async function openSettings(): Promise<void> {
 	settingsView.appendChild(heading("Capture behavior"));
 	settingsView.appendChild(buildCaptureModeRow(current));
 	for (const row of buildBehaviorRows(current)) settingsView.appendChild(row);
+	settingsView.appendChild(buildExcludedAppsRow(current));
 
 	settingsView.appendChild(heading("Visibility"));
 	for (const row of buildVisibilityRows(current)) settingsView.appendChild(row);
@@ -2190,6 +2240,14 @@ async function openSettings(): Promise<void> {
 	syncContainer.id = "sync-rows-container";
 	for (const row of buildSyncRows(current)) syncContainer.appendChild(row);
 	settingsView.appendChild(syncContainer);
+	settingsView.appendChild(
+		buildCheckboxRow(
+			"Encrypt local database at rest (restart required)",
+			current.encrypt_local_storage,
+			false,
+			(checked) => ({ encrypt_local_storage: checked }),
+		),
+	);
 
 	settingsView.appendChild(heading("Export"));
 	settingsView.appendChild(buildExportRow());
