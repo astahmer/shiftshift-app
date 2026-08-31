@@ -11,13 +11,13 @@ use crate::templates::{self, Template, TemplatesState};
 
 #[tauri::command]
 pub fn list_items(db: State<Db>) -> Result<Vec<Item>, String> {
-    db.0.list_items()
+    db.store.list_items()
 }
 
 #[tauri::command]
 pub fn add_item(db: State<Db>, app: AppHandle, text: String, kind: ItemKind) -> Result<Item, String> {
-    let item = db.0.add_item(&text, kind, None)?;
-    let _ = db.0.log_event(Some(&item.id), "created", Some(&item.text));
+    let item = db.store.add_item(&text, kind, None)?;
+    let _ = db.store.log_event(Some(&item.id), "created", Some(&item.text));
     let _ = app.emit("refresh", ());
     crate::notify::notify_captured(&app, &item);
     Ok(item)
@@ -25,55 +25,55 @@ pub fn add_item(db: State<Db>, app: AppHandle, text: String, kind: ItemKind) -> 
 
 #[tauri::command]
 pub fn toggle_done(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    db.0.toggle_done(&id)?;
-    let _ = db.0.log_event(Some(&id), "toggled_done", None);
+    db.store.toggle_done(&id)?;
+    let _ = db.store.log_event(Some(&id), "toggled_done", None);
     let _ = app.emit("refresh", ());
     Ok(())
 }
 
 #[tauri::command]
 pub fn toggle_bookmarked(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    db.0.toggle_bookmarked(&id)?;
-    let _ = db.0.log_event(Some(&id), "toggled_bookmark", None);
+    db.store.toggle_bookmarked(&id)?;
+    let _ = db.store.log_event(Some(&id), "toggled_bookmark", None);
     let _ = app.emit("refresh", ());
     Ok(())
 }
 
 #[tauri::command]
 pub fn set_kind(db: State<Db>, app: AppHandle, id: String, kind: ItemKind) -> Result<(), String> {
-    db.0.set_kind(&id, kind)?;
-    let _ = db.0.log_event(Some(&id), "kind_changed", Some(&format!("{kind:?}")));
+    db.store.set_kind(&id, kind)?;
+    let _ = db.store.log_event(Some(&id), "kind_changed", Some(&format!("{kind:?}")));
     let _ = app.emit("refresh", ());
     Ok(())
 }
 
 #[tauri::command]
 pub fn update_item_text(db: State<Db>, app: AppHandle, id: String, text: String) -> Result<(), String> {
-    db.0.update_text(&id, &text)?;
-    let _ = db.0.log_event(Some(&id), "edited", Some(&text));
+    db.store.update_text(&id, &text)?;
+    let _ = db.store.log_event(Some(&id), "edited", Some(&text));
     let _ = app.emit("refresh", ());
     Ok(())
 }
 
 #[tauri::command]
 pub fn delete_item(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    let detail = db.0.list_items().ok().and_then(|items| items.into_iter().find(|i| i.id == id)).map(|i| i.text);
-    db.0.delete_item(&id)?;
-    let _ = db.0.log_event(Some(&id), "deleted", detail.as_deref());
+    let detail = db.store.list_items().ok().and_then(|items| items.into_iter().find(|i| i.id == id)).map(|i| i.text);
+    db.store.delete_item(&id)?;
+    let _ = db.store.log_event(Some(&id), "deleted", detail.as_deref());
     let _ = app.emit("refresh", ());
     Ok(())
 }
 
 #[tauri::command]
 pub fn clear_completed(db: State<Db>, app: AppHandle) -> Result<(), String> {
-    db.0.clear_completed()?;
+    db.store.clear_completed()?;
     let _ = app.emit("refresh", ());
     Ok(())
 }
 
 #[tauri::command]
 pub fn move_item(db: State<Db>, app: AppHandle, id: String, direction: MoveDirection) -> Result<(), String> {
-    db.0.move_item(&id, direction)?;
+    db.store.move_item(&id, direction)?;
     let _ = app.emit("refresh", ());
     Ok(())
 }
@@ -83,8 +83,8 @@ pub fn move_item(db: State<Db>, app: AppHandle, id: String, direction: MoveDirec
 /// than reconstructing one.
 #[tauri::command]
 pub fn restore_item(db: State<Db>, app: AppHandle, item: Item) -> Result<(), String> {
-    db.0.restore_item(item.clone())?;
-    let _ = db.0.log_event(Some(&item.id), "restored", Some(&item.text));
+    db.store.restore_item(item.clone())?;
+    let _ = db.store.log_event(Some(&item.id), "restored", Some(&item.text));
     let _ = app.emit("refresh", ());
     Ok(())
 }
@@ -93,21 +93,21 @@ pub fn restore_item(db: State<Db>, app: AppHandle, item: Item) -> Result<(), Str
 /// up/down", so reordering can be reverted precisely.
 #[tauri::command]
 pub fn set_rank(db: State<Db>, app: AppHandle, id: String, rank: f64) -> Result<(), String> {
-    db.0.set_rank(&id, rank)?;
+    db.store.set_rank(&id, rank)?;
     let _ = app.emit("refresh", ());
     Ok(())
 }
 
 #[tauri::command]
 pub fn list_history(db: State<Db>, limit: u32) -> Result<Vec<HistoryEntry>, String> {
-    db.0.list_history(limit)
+    db.store.list_history(limit)
 }
 
 /// Called by the frontend right after copying/opening a selected row, purely
 /// to record it in history — not a mutation, so no "refresh" event.
 #[tauri::command]
 pub fn log_used(db: State<Db>, id: String) -> Result<(), String> {
-    db.0.log_event(Some(&id), "used", None)
+    db.store.log_event(Some(&id), "used", None)
 }
 
 /// Called by the frontend right after it writes to the system clipboard
@@ -131,6 +131,48 @@ pub fn copy_image_to_clipboard(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn fetch_link_preview(url: String) -> Result<crate::link_preview::LinkPreview, String> {
     crate::link_preview::fetch(&url)
+}
+
+/// Reveals a file in Finder so its native Share button (AirDrop, Mail,
+/// Messages, third-party share extensions — everything) is one click away.
+/// Not `NSSharingService` invoked directly: that reliably returns
+/// `canPerformWithItems == false` when called from a spawned helper
+/// process (confirmed live, both for AirDrop and Compose Email) — it needs
+/// a real foreground NSApplication context, which neither `osascript` nor
+/// a `std::process::Command`-spawned process has, regardless of what
+/// spawned it. A true in-app share picker would need actual Cocoa linkage
+/// (objc2 + a raw window handle), not a shell-out — deliberately not done
+/// here without asking first, since it's a real new dependency.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn reveal_in_finder(path: String) -> Result<(), String> {
+    std::process::Command::new("open").arg("-R").arg(&path).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn reveal_in_finder(_path: String) -> Result<(), String> {
+    Err("revealing a file in the system file manager isn't wired up on this platform yet".to_string())
+}
+
+#[derive(serde::Serialize)]
+pub struct SyncStatus {
+    /// "local" | "s3" | "folder" — what's actually in use right now, which
+    /// can differ from `Settings::backend` if that backend failed to open
+    /// and `Db::open` fell back to local storage.
+    pub active_backend: String,
+    pub configured_backend: String,
+    pub fallback_reason: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_sync_status(db: State<Db>, settings: State<SettingsState>) -> SyncStatus {
+    SyncStatus {
+        active_backend: db.active_backend.clone(),
+        configured_backend: settings.0.lock().unwrap().backend.clone(),
+        fallback_reason: db.fallback_reason.clone(),
+    }
 }
 
 #[tauri::command]
@@ -181,7 +223,7 @@ pub fn set_settings(settings: State<SettingsState>, app: AppHandle, next: Settin
 /// path, so the frontend can open it (e.g. via `plugin-shell`'s `open`).
 #[tauri::command]
 pub fn export_markdown(db: State<Db>, app: AppHandle) -> Result<String, String> {
-    let items = db.0.list_items()?;
+    let items = db.store.list_items()?;
     let markdown = export::to_markdown(&items);
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("exports");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

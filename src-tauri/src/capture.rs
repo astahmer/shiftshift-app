@@ -99,7 +99,7 @@ pub(crate) fn promote_last_capture_to_todo(app: &AppHandle, gesture_at: Instant)
             if let Some((id, at)) = LAST_CAPTURE.lock().unwrap().clone() {
                 if at >= gesture_at {
                     let db = app.state::<db::Db>();
-                    if db.0.set_kind(&id, crate::store::ItemKind::Todo).is_ok() {
+                    if db.store.set_kind(&id, crate::store::ItemKind::Todo).is_ok() {
                         let _ = app.emit("refresh", ());
                     }
                     return;
@@ -389,9 +389,9 @@ pub(crate) fn handle_captured_text(app: &AppHandle, text: &str, source_app: Opti
     }
 
     let db = app.state::<db::Db>();
-    let item = db.0.add_item(text, detect_kind(text), source_app)?;
+    let item = db.store.add_item(text, detect_kind(text), source_app)?;
     *LAST_CAPTURE.lock().unwrap() = Some((item.id.clone(), Instant::now()));
-    let _ = db.0.log_event(Some(&item.id), "created", Some(&item.text));
+    let _ = db.store.log_event(Some(&item.id), "created", Some(&item.text));
     let _ = app.emit("refresh", ());
     let _ = app.emit("captured", ());
     crate::notify::notify_captured(app, &item);

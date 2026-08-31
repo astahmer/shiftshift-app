@@ -89,6 +89,12 @@ pub struct Settings {
     /// on. Only affects the local backend; S3/folder backends store plain
     /// JSON regardless (out of scope for this pass).
     pub encrypt_local_storage: bool,
+    /// Item ids pinned to ⌘1-⌘9 for instant copy-and-close, Raycast-
+    /// favorites-style — index 0 is slot 1, etc. Always exactly 9 entries;
+    /// an empty string means that slot is unassigned. Kept as item ids
+    /// (not a separate struct) so a pin is just "point at an existing row",
+    /// no duplicate storage of the item's content.
+    pub pinned_items: Vec<String>,
 }
 
 pub const DEFAULT_EXCLUDED_APPS: &[&str] =
@@ -117,6 +123,7 @@ impl Default for Settings {
             panel_opacity: 0,
             excluded_apps: DEFAULT_EXCLUDED_APPS.iter().map(|s| s.to_string()).collect(),
             encrypt_local_storage: false,
+            pinned_items: vec![String::new(); 9],
         }
     }
 }

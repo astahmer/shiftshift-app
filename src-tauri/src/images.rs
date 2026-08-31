@@ -64,8 +64,8 @@ pub fn capture_clipboard_image(app: &AppHandle) -> Result<Item, String> {
     write_png(&image, &path)?;
 
     let db = app.state::<crate::db::Db>();
-    let item = db.0.add_item(&path.to_string_lossy(), ItemKind::Image, crate::capture::frontmost_app_name())?;
-    let _ = db.0.log_event(Some(&item.id), "created", Some("image"));
+    let item = db.store.add_item(&path.to_string_lossy(), ItemKind::Image, crate::capture::frontmost_app_name())?;
+    let _ = db.store.log_event(Some(&item.id), "created", Some("image"));
     let _ = app.emit("refresh", ());
     crate::notify::notify_captured(app, &item);
     Ok(item)
