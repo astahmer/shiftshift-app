@@ -8,6 +8,7 @@ import {
 	filterItems,
 	findDuplicate,
 	formatRelativeTime,
+	HELP_SHORTCUTS,
 	isImportableTheme,
 	lastToken,
 	matchAtSuggestions,
@@ -20,6 +21,7 @@ import {
 	parseUiCommand,
 	resolveCapture,
 	SORT_OPTIONS,
+	type SlashMode,
 	type SlashSuggestion,
 	type ThemeChoice,
 } from "./capture-logic";
@@ -36,6 +38,7 @@ import {
 	type S3Settings,
 	type Settings,
 	type SortMode,
+	type SyncStatus,
 	type Template,
 	type ThemeColors,
 } from "./store";
@@ -52,10 +55,19 @@ input.className = "capture-input";
 input.placeholder = "Capture anything…   / for commands   @ to filter";
 captureRow.appendChild(input);
 
+// Overlaid on the input's left padding — all suggestion rows (commands,
+// theme, sort, history, @, #) used to look identical with no way to tell
+// which "mode" you were in beyond reading the text.
+const modeBadge = document.createElement("div");
+modeBadge.className = "mode-badge";
+modeBadge.hidden = true;
+captureRow.appendChild(modeBadge);
+
 const settingsBtn = document.createElement("button");
 settingsBtn.className = "settings-btn";
 settingsBtn.textContent = "⚙";
 settingsBtn.title = "Settings";
+settingsBtn.setAttribute("aria-label", "Settings");
 captureRow.appendChild(settingsBtn);
 
 const duplicateHint = document.createElement("div");
@@ -86,15 +98,17 @@ app.appendChild(detailView);
 const statusToast = document.createElement("div");
 statusToast.className = "status-toast";
 statusToast.hidden = true;
+statusToast.setAttribute("role", "status");
+statusToast.setAttribute("aria-live", "polite");
 app.appendChild(statusToast);
 
 let statusToastTimer: ReturnType<typeof setTimeout> | undefined;
 /** Brief, self-dismissing confirmation — used for undo/redo, since those don't otherwise give any feedback that something happened. */
-function showStatusToast(message: string): void {
+function showStatusToast(message: string, durationMs = 1800): void {
 	statusToast.textContent = message;
 	statusToast.hidden = false;
 	clearTimeout(statusToastTimer);
-	statusToastTimer = setTimeout(() => (statusToast.hidden = true), 1800);
+	statusToastTimer = setTimeout(() => (statusToast.hidden = true), durationMs);
 }
 
 let items: Item[] = [];
@@ -137,7 +151,8 @@ type UndoEntry =
 	| { type: "toggle_bookmarked"; id: string }
 	| { type: "set_kind"; id: string; from: ItemKind; to: ItemKind }
 	| { type: "update_text"; id: string; from: string; to: string }
-	| { type: "move"; id: string; from: number; to: number };
+	| { type: "move"; id: string; from: number; to: number }
+	| { type: "bulk"; entries: UndoEntry[] };
 
 const undoStack: UndoEntry[] = [];
 const redoStack: UndoEntry[] = [];
@@ -149,8 +164,7 @@ function pushUndo(entry: UndoEntry): void {
 	redoStack.length = 0;
 }
 
-/** Applies the reverse of `entry`, refreshes, and shows a confirmation toast. */
-async function applyUndoEntry(entry: UndoEntry): Promise<void> {
+async function undoMutation(entry: UndoEntry): Promise<void> {
 	switch (entry.type) {
 		case "add":
 			await Store.deleteItem(entry.item.id);
@@ -173,12 +187,13 @@ async function applyUndoEntry(entry: UndoEntry): Promise<void> {
 		case "move":
 			await Store.setRank(entry.id, entry.from);
 			break;
+		case "bulk":
+			for (const sub of entry.entries) await undoMutation(sub);
+			break;
 	}
-	await refresh();
 }
 
-/** Re-applies `entry`'s original mutation (the forward direction) — used by redo. */
-async function applyRedoEntry(entry: UndoEntry): Promise<void> {
+async function redoMutation(entry: UndoEntry): Promise<void> {
 	switch (entry.type) {
 		case "add":
 			await Store.restoreItem(entry.item);
@@ -201,8 +216,49 @@ async function applyRedoEntry(entry: UndoEntry): Promise<void> {
 		case "move":
 			await Store.setRank(entry.id, entry.to);
 			break;
+		case "bulk":
+			for (const sub of entry.entries) await redoMutation(sub);
+			break;
 	}
+}
+
+/** Applies the reverse of `entry`, refreshes once (even for a "bulk" entry covering many items), and shows a confirmation toast. */
+async function applyUndoEntry(entry: UndoEntry): Promise<void> {
+	await undoMutation(entry);
 	await refresh();
+}
+
+/** Re-applies `entry`'s original mutation (the forward direction) — used by redo. */
+async function applyRedoEntry(entry: UndoEntry): Promise<void> {
+	await redoMutation(entry);
+	await refresh();
+}
+
+/** ⌘1-⌘9: copy-and-close whatever's pinned to that slot, Raycast-favorites-style. */
+async function actOnPinnedSlot(slotIndex: number): Promise<void> {
+	const current = await loadSettings();
+	const pinnedId = current.pinned_items[slotIndex];
+	if (!pinnedId) {
+		showStatusToast(`Nothing pinned to ⌘${slotIndex + 1} yet — ⌘⇧${slotIndex + 1} to pin the selected item`);
+		return;
+	}
+	const item = items.find((i) => i.id === pinnedId);
+	if (!item) {
+		showStatusToast(`The item pinned to ⌘${slotIndex + 1} no longer exists`);
+		return;
+	}
+	await actOnItem(item);
+	await getCurrentWindow().hide();
+}
+
+/** ⌘⇧1-⌘⇧9: pins the currently keyboard-selected row to that slot, replacing whatever was there. */
+async function assignPinnedSlot(slotIndex: number): Promise<void> {
+	if (selected < 0 || !filtered[selected]) return;
+	const current = await loadSettings();
+	const next = { ...current, pinned_items: current.pinned_items.map((id, i) => (i === slotIndex ? filtered[selected]!.id : id)) };
+	settings = next;
+	await Store.setSettings(next);
+	showStatusToast(`Pinned to ⌘${slotIndex + 1}`);
 }
 
 async function undo(): Promise<void> {
@@ -296,6 +352,7 @@ function currentSuggestionCount(raw: string): number {
 		}
 		if (mode.type === "sort") return matchSortSuggestions(mode.query).length;
 		if (mode.type === "history") return 0;
+		if (mode.type === "help") return 0;
 		return matchSlashSuggestions(raw, templatesCache).length;
 	}
 	const partial = lastToken(raw);
@@ -307,7 +364,7 @@ function currentSuggestionCount(raw: string): number {
 function updateHint(): void {
 	if (multiSelected.size > 0) {
 		duplicateHint.hidden = false;
-		duplicateHint.textContent = `${multiSelected.size} selected — Enter copies them as a numbered list`;
+		duplicateHint.textContent = `${multiSelected.size} selected — Enter copies as a list, ⌘⌫ deletes, ⌘B/⌘T toggle bookmark/todo`;
 		return;
 	}
 	duplicateHint.textContent = "Already saved — Enter adds it again";
@@ -337,6 +394,15 @@ function updateMetaBar(): void {
 	metaBar.hidden = false;
 }
 
+function buildEmptyState(neverCaptured: boolean): HTMLElement {
+	const wrapper = document.createElement("div");
+	wrapper.className = "empty-state";
+	wrapper.textContent = neverCaptured
+		? "Nothing captured yet — double-tap Shift, or type here and press ⌘Enter. Type /help for shortcuts."
+		: "No matches for this filter.";
+	return wrapper;
+}
+
 function isPreviewMode(mode: ReturnType<typeof parseSlashMode> | null): boolean {
 	return mode !== null && (mode.type === "theme" || mode.type === "light" || mode.type === "dark" || mode.type === "sort");
 }
@@ -346,9 +412,33 @@ function scrollSelectedIntoView(): void {
 	list.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
 }
 
+const MODE_BADGE_LABELS: Partial<Record<SlashMode["type"], string>> = {
+	theme: "THEME",
+	light: "THEME",
+	dark: "THEME",
+	sort: "SORT",
+	history: "HISTORY",
+	help: "HELP",
+};
+
+function updateModeBadge(raw: string, mode: SlashMode | null): void {
+	let label: string | null = null;
+	if (mode) {
+		label = MODE_BADGE_LABELS[mode.type] ?? null;
+	} else {
+		const partial = lastToken(raw);
+		if (partial.startsWith("@")) label = "FILTER";
+		else if (partial.startsWith("#")) label = "TAG";
+	}
+	modeBadge.textContent = label ?? "";
+	modeBadge.hidden = !label;
+	input.classList.toggle("has-mode-badge", !!label);
+}
+
 function renderList(): void {
 	const raw = input.value;
 	const mode = raw.startsWith("/") ? parseSlashMode(raw) : null;
+	updateModeBadge(raw, mode);
 	if (previewSnapshot !== null && !isPreviewMode(mode)) {
 		cancelPreview();
 	}
@@ -378,6 +468,9 @@ function renderList(): void {
 	filtered = computeFiltered();
 	if (selected >= filtered.length) selected = filtered.length - 1;
 	list.innerHTML = "";
+	if (filtered.length === 0) {
+		list.appendChild(buildEmptyState(items.length === 0));
+	}
 	filtered.forEach((item, index) => {
 		list.appendChild(buildRow(item, index));
 	});
@@ -424,6 +517,11 @@ function renderSlashSuggestions(raw: string): void {
 		return;
 	}
 
+	if (mode.type === "help") {
+		renderHelpRows();
+		return;
+	}
+
 	commandSuggestions = matchSlashSuggestions(raw, templatesCache);
 	if (selected >= commandSuggestions.length) selected = commandSuggestions.length - 1;
 	commandSuggestions.forEach((suggestion, index) => list.appendChild(buildSuggestionRow(suggestion, index)));
@@ -466,6 +564,36 @@ function buildHistoryEntryRow(entry: HistoryEntry): HTMLElement {
 	text.className = "item-text";
 	text.textContent = entry.detail ? `${entry.action}: ${entry.detail}` : entry.action;
 	row.appendChild(text);
+	return row;
+}
+
+let lastHelpCategory = "";
+
+function renderHelpRows(): void {
+	lastHelpCategory = "";
+	for (const entry of HELP_SHORTCUTS) list.appendChild(buildHelpRow(entry));
+	duplicateHint.hidden = true;
+	metaBar.hidden = true;
+}
+
+function buildHelpRow(entry: (typeof HELP_SHORTCUTS)[number]): HTMLElement {
+	const row = document.createElement("div");
+	row.className = "item-row help-row";
+	const category = document.createElement("span");
+	category.className = "help-category";
+	// Only label the first row of each category — repeating it on every row
+	// would be noisier than the section-less grouping it's meant to replace.
+	category.textContent = entry.category === lastHelpCategory ? "" : entry.category;
+	lastHelpCategory = entry.category;
+	row.appendChild(category);
+	const shortcut = document.createElement("span");
+	shortcut.className = "help-shortcut";
+	shortcut.textContent = entry.shortcut;
+	row.appendChild(shortcut);
+	const description = document.createElement("span");
+	description.className = "help-description";
+	description.textContent = entry.description;
+	row.appendChild(description);
 	return row;
 }
 
@@ -719,10 +847,19 @@ function buildRow(item: Item, index: number): HTMLElement {
 	}
 
 	actions.appendChild(
+		buildActionButton("item-share", "Share", "⤴", "⌘⇧S", (e) => {
+			e.stopPropagation();
+			void shareItem(item);
+		}),
+	);
+
+	actions.appendChild(
 		buildActionButton("item-delete", "Delete", "🗑", "⌫", (e) => {
 			e.stopPropagation();
 			pushUndo({ type: "delete", item });
-			void Store.deleteItem(item.id).then(refresh);
+			void Store.deleteItem(item.id)
+				.then(refresh)
+				.then(() => showStatusToast("Deleted — ⌘Z to undo"));
 		}),
 	);
 
@@ -735,6 +872,7 @@ function buildActionButton(className: string, title: string, glyph: string, hint
 	const button = document.createElement("button");
 	button.className = `item-action ${className}`;
 	button.title = title;
+	button.setAttribute("aria-label", title);
 	button.onclick = onclick;
 
 	const hintLabel = document.createElement("span");
@@ -755,6 +893,9 @@ function buildIcon(item: Item): HTMLElement {
 		const check = document.createElement("div");
 		check.className = "item-icon item-check";
 		check.dataset.done = String(item.done);
+		check.setAttribute("role", "checkbox");
+		check.setAttribute("aria-checked", String(item.done));
+		check.setAttribute("aria-label", item.done ? "Mark todo as not done" : "Mark todo as done");
 		check.onclick = (e) => {
 			e.stopPropagation();
 			pushUndo({ type: "toggle_done", id: item.id });
@@ -765,6 +906,7 @@ function buildIcon(item: Item): HTMLElement {
 	const icon = document.createElement("div");
 	icon.className = `item-icon item-icon-${item.kind}`;
 	icon.textContent = item.kind === "link" ? "↗" : item.kind === "image" ? "▧" : "●";
+	icon.setAttribute("aria-hidden", "true");
 	return icon;
 }
 
@@ -855,6 +997,25 @@ async function actOnItem(item: Item): Promise<void> {
 	await Store.logUsed(item.id);
 }
 
+/**
+ * Best reliable approximation of a native share sheet without adding a
+ * Cocoa-binding dependency (see `reveal_in_finder`'s doc comment for why
+ * `NSSharingService` itself doesn't work from a spawned process): images
+ * get revealed in Finder, where its own Share button has full AirDrop/
+ * Mail/Messages/etc access; everything else opens a prefilled Mail compose
+ * window via the `mailto:` URL scheme, which is reliable with no Cocoa
+ * calls at all.
+ */
+async function shareItem(item: Item): Promise<void> {
+	if (item.kind === "image") {
+		await Store.revealInFinder(item.text);
+		return;
+	}
+	const subject = encodeURIComponent("Shared from shiftshift");
+	const body = encodeURIComponent(item.text);
+	await open(`mailto:?subject=${subject}&body=${body}`);
+}
+
 /** Plain Enter with a multi-selection built up via Shift+Enter: join as a numbered list, copy, close. */
 async function copyMultiSelectionAndClose(): Promise<void> {
 	const ordered = items.filter((item) => multiSelected.has(item.id));
@@ -864,6 +1025,42 @@ async function copyMultiSelectionAndClose(): Promise<void> {
 	for (const item of ordered) await Store.logUsed(item.id);
 	multiSelected.clear();
 	await getCurrentWindow().hide();
+}
+
+/** Deletes every multi-selected item as one undoable action, then clears the selection. */
+async function bulkDelete(): Promise<void> {
+	const selected = items.filter((item) => multiSelected.has(item.id));
+	if (selected.length === 0) return;
+	for (const item of selected) await Store.deleteItem(item.id);
+	pushUndo({ type: "bulk", entries: selected.map((item) => ({ type: "delete", item })) });
+	multiSelected.clear();
+	await refresh();
+	showStatusToast(`Deleted ${selected.length} item${selected.length === 1 ? "" : "s"}`);
+}
+
+/** Toggles each multi-selected item's own bookmark state independently — mirrors the single-item shortcut, just applied to N items. */
+async function bulkToggleBookmark(): Promise<void> {
+	const selected = items.filter((item) => multiSelected.has(item.id));
+	if (selected.length === 0) return;
+	for (const item of selected) await Store.toggleBookmarked(item.id);
+	pushUndo({ type: "bulk", entries: selected.map((item) => ({ type: "toggle_bookmarked", id: item.id })) });
+	await refresh();
+	showStatusToast(`Toggled bookmark on ${selected.length} item${selected.length === 1 ? "" : "s"}`);
+}
+
+/** Toggles each multi-selected item's own todo/note kind independently, like the single-item ⌘T shortcut. */
+async function bulkToggleTodo(): Promise<void> {
+	const selected = items.filter((item) => multiSelected.has(item.id) && item.kind !== "image");
+	if (selected.length === 0) return;
+	const entries: UndoEntry[] = [];
+	for (const item of selected) {
+		const to: ItemKind = item.kind === "todo" ? "note" : "todo";
+		await Store.setKind(item.id, to);
+		entries.push({ type: "set_kind", id: item.id, from: item.kind, to });
+	}
+	pushUndo({ type: "bulk", entries });
+	await refresh();
+	showStatusToast(`Toggled todo on ${selected.length} item${selected.length === 1 ? "" : "s"}`);
 }
 
 function formatAbsoluteTime(iso: string): string {
@@ -948,6 +1145,21 @@ function buildDetailTags(item: Item): HTMLElement {
 	addRow.className = "detail-add-tag";
 	const tagInput = document.createElement("input");
 	tagInput.placeholder = "Add a tag";
+	// Native <datalist> autocomplete against tags already in use elsewhere —
+	// avoids accidentally forking "work" vs "worklife" by typo, matching the
+	// `#` suggestion mode's tag source.
+	const existingTags = extractTags(items);
+	if (existingTags.length > 0) {
+		const datalist = document.createElement("datalist");
+		datalist.id = `tag-suggestions-${item.id}`;
+		for (const tag of existingTags) {
+			const option = document.createElement("option");
+			option.value = tag;
+			datalist.appendChild(option);
+		}
+		tagInput.setAttribute("list", datalist.id);
+		addRow.appendChild(datalist);
+	}
 	const addTag = async (): Promise<void> => {
 		const clean = tagInput.value.trim().replace(/^#/, "").replace(/\s+/g, "-");
 		if (!clean) return;
@@ -1061,6 +1273,11 @@ function buildDetailView(item: Item): void {
 		actions.appendChild(editBtn);
 	}
 
+	const shareBtn = document.createElement("button");
+	shareBtn.textContent = "Share";
+	shareBtn.onclick = () => void shareItem(item);
+	actions.appendChild(shareBtn);
+
 	const deleteBtn = document.createElement("button");
 	deleteBtn.textContent = "Delete";
 	deleteBtn.onclick = async () => {
@@ -1068,6 +1285,7 @@ function buildDetailView(item: Item): void {
 		await Store.deleteItem(item.id);
 		closeDetail();
 		await refresh();
+		showStatusToast("Deleted — ⌘Z to undo");
 	};
 	actions.appendChild(deleteBtn);
 
@@ -1193,6 +1411,20 @@ document.addEventListener("keydown", async (e) => {
 		if (e.shiftKey && e.key === "ArrowLeft") {
 			e.preventDefault();
 			closeDetail();
+			return;
+		}
+		// Quick-look style browsing — move to the next/previous item's detail
+		// without backing out to the list first.
+		if ((e.key === "ArrowDown" || e.key === "ArrowUp") && detailItem) {
+			e.preventDefault();
+			const currentIndex = filtered.findIndex((i) => i.id === detailItem!.id);
+			if (currentIndex >= 0) {
+				const nextIndex = e.key === "ArrowDown" ? Math.min(currentIndex + 1, filtered.length - 1) : Math.max(currentIndex - 1, 0);
+				if (filtered[nextIndex] && nextIndex !== currentIndex) {
+					selected = nextIndex;
+					showDetail(filtered[nextIndex]!);
+				}
+			}
 		}
 		return;
 	}
@@ -1282,13 +1514,26 @@ document.addEventListener("keydown", async (e) => {
 	}
 	// Cmd+Delete/Backspace, not the bare key — an accidental bare Delete/
 	// Backspace while just browsing the list (input empty, a row focused)
-	// used to delete it outright with no confirmation.
+	// used to delete it outright with no confirmation. With a multi-
+	// selection active, these act on the whole selection instead of just
+	// the highlighted row.
+	if (modKey && (e.key === "Backspace" || e.key === "Delete") && input.value === "" && multiSelected.size > 0) {
+		e.preventDefault();
+		await bulkDelete();
+		return;
+	}
 	if (modKey && (e.key === "Backspace" || e.key === "Delete") && input.value === "" && selected >= 0 && filtered[selected]) {
 		e.preventDefault();
 		const item = filtered[selected]!;
 		pushUndo({ type: "delete", item });
 		await Store.deleteItem(item.id);
 		await refresh();
+		showStatusToast("Deleted — ⌘Z to undo");
+		return;
+	}
+	if (modKey && e.key.toLowerCase() === "b" && multiSelected.size > 0) {
+		e.preventDefault();
+		await bulkToggleBookmark();
 		return;
 	}
 	if (modKey && e.key.toLowerCase() === "b" && selected >= 0 && filtered[selected]) {
@@ -1301,6 +1546,16 @@ document.addEventListener("keydown", async (e) => {
 	if (modKey && e.key.toLowerCase() === "e" && selected >= 0 && filtered[selected] && filtered[selected]!.kind !== "image") {
 		e.preventDefault();
 		startEditing(filtered[selected]!.id);
+		return;
+	}
+	if (modKey && e.shiftKey && e.key.toLowerCase() === "s" && selected >= 0 && filtered[selected]) {
+		e.preventDefault();
+		await shareItem(filtered[selected]!);
+		return;
+	}
+	if (modKey && e.key.toLowerCase() === "t" && multiSelected.size > 0) {
+		e.preventDefault();
+		await bulkToggleTodo();
 		return;
 	}
 	if (modKey && e.key.toLowerCase() === "t" && selected >= 0 && filtered[selected] && filtered[selected]!.kind !== "image") {
@@ -1318,6 +1573,16 @@ document.addEventListener("keydown", async (e) => {
 		else await undo();
 		return;
 	}
+	// `e.code` (physical key), not `e.key` — Shift+1 on a US layout reports
+	// `e.key === "!"`, so checking `e.key` would silently miss ⌘⇧1-⌘⇧9.
+	const pinnedSlotMatch = /^Digit([1-9])$/.exec(e.code);
+	if (modKey && pinnedSlotMatch && !slashMode && !inAtMode && !inHashMode) {
+		e.preventDefault();
+		const slotIndex = Number(pinnedSlotMatch[1]) - 1;
+		if (e.shiftKey) await assignPinnedSlot(slotIndex);
+		else await actOnPinnedSlot(slotIndex);
+		return;
+	}
 	if (modKey && e.key.toLowerCase() === "c" && input.value === "" && selected >= 0 && filtered[selected]) {
 		e.preventDefault();
 		await actOnItem(filtered[selected]!);
@@ -1333,7 +1598,7 @@ document.addEventListener("keydown", async (e) => {
 
 	if (slashMode && slashMode.type !== "commands") {
 		e.preventDefault();
-		if (slashMode.type === "history") {
+		if (slashMode.type === "history" || slashMode.type === "help") {
 			input.value = "";
 			selected = -1;
 			renderList();
@@ -1558,7 +1823,11 @@ function buildOpacityRow(current: Settings): HTMLElement {
 	slider.max = "100";
 	slider.value = String(current.panel_opacity > 0 ? current.panel_opacity : 50);
 	slider.disabled = current.panel_opacity === 0;
+	const readout = document.createElement("span");
+	readout.className = "opacity-readout";
+	readout.textContent = `${slider.value}%`;
 	slider.oninput = () => {
+		readout.textContent = `${slider.value}%`;
 		if (settings) {
 			settings.panel_opacity = Number(slider.value);
 			applyTheme(settings.theme);
@@ -1569,6 +1838,7 @@ function buildOpacityRow(current: Settings): HTMLElement {
 		await Store.setSettings(settings);
 	};
 	row.appendChild(slider);
+	row.appendChild(readout);
 
 	const resetBtn = document.createElement("button");
 	resetBtn.textContent = current.panel_opacity === 0 ? "Override theme opacity" : "Use theme default";
@@ -1655,6 +1925,36 @@ function buildBehaviorRows(current: Settings): HTMLElement[] {
 		),
 		buildCheckboxRow("Launch at login", current.launch_at_login, false, (checked) => ({ launch_at_login: checked })),
 	];
+}
+
+function buildPinnedItemsSection(current: Settings): HTMLElement {
+	const wrapper = document.createElement("div");
+	for (let slot = 0; slot < 9; slot++) {
+		const id = current.pinned_items[slot];
+		const item = id ? items.find((i) => i.id === id) : undefined;
+		const row = document.createElement("div");
+		row.className = "settings-row";
+		const label = document.createElement("label");
+		label.textContent = `⌘${slot + 1}`;
+		row.appendChild(label);
+		const value = document.createElement("span");
+		value.className = "pinned-item-value";
+		value.textContent = item ? item.text : id ? "(item no longer exists)" : "Not set — select a row, ⌘⇧" + (slot + 1);
+		row.appendChild(value);
+		if (id) {
+			const clearBtn = document.createElement("button");
+			clearBtn.textContent = "Clear";
+			clearBtn.onclick = async () => {
+				const next = { ...current, pinned_items: current.pinned_items.map((v, i) => (i === slot ? "" : v)) };
+				settings = next;
+				await Store.setSettings(next);
+				await openSettings();
+			};
+			row.appendChild(clearBtn);
+		}
+		wrapper.appendChild(row);
+	}
+	return wrapper;
 }
 
 /** One app name per line — parsed/joined on blur rather than per-keystroke, since a half-typed name shouldn't affect matching. */
@@ -2185,30 +2485,90 @@ function renderCustomThemesSection(container: HTMLElement, themes: CustomTheme[]
 	container.appendChild(ioRow);
 }
 
+function sectionId(text: string): string {
+	return `settings-section-${text.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
 function heading(text: string): HTMLElement {
 	const h = document.createElement("h3");
 	h.textContent = text;
+	h.id = sectionId(text);
 	return h;
 }
 
+/** [visible label, exact heading text to jump to] — a short list of the sections worth a quick jump, not every single one. */
+const SETTINGS_NAV: Array<[string, string]> = [
+	["Appearance", "Appearance"],
+	["Capture", "Capture behavior"],
+	["Pins", "Pinned quick-access"],
+	["Shortcuts", "Double-shift bindings"],
+	["Notifications", "Notifications"],
+	["Templates", "Snippet templates"],
+	["Sync", "Sync"],
+	["History", "History"],
+];
+
+function buildSettingsNav(): HTMLElement {
+	const nav = document.createElement("div");
+	nav.className = "settings-nav";
+	for (const [label, target] of SETTINGS_NAV) {
+		const btn = document.createElement("button");
+		btn.className = "settings-nav-btn";
+		btn.textContent = label;
+		btn.onclick = () => document.getElementById(sectionId(target))?.scrollIntoView({ block: "start", behavior: "smooth" });
+		nav.appendChild(btn);
+	}
+	return nav;
+}
+
+function buildSyncStatusRow(status: SyncStatus): HTMLElement {
+	const row = document.createElement("div");
+	row.className = "settings-row sync-status-row";
+	const backendLabels: Record<SyncStatus["active_backend"], string> = { local: "Local", s3: "S3", folder: "Folder" };
+	const label = document.createElement("span");
+	if (status.fallback_reason) {
+		label.textContent = `⚠️ Using ${backendLabels[status.active_backend]} — ${status.fallback_reason}`;
+		row.classList.add("sync-status-warning");
+	} else {
+		label.textContent = `✓ Active: ${backendLabels[status.active_backend]}`;
+	}
+	row.appendChild(label);
+	return row;
+}
+
 async function openSettings(): Promise<void> {
-	const [current, templates, historySection] = await Promise.all([loadSettings(), Store.listTemplates(), buildHistorySection()]);
+	const [current, templates, historySection, syncStatus] = await Promise.all([
+		loadSettings(),
+		Store.listTemplates(),
+		buildHistorySection(),
+		Store.getSyncStatus(),
+	]);
 	settingsView.innerHTML = "";
+	settingsView.appendChild(buildSettingsNav());
 
 	settingsView.appendChild(heading("Appearance"));
 	settingsView.appendChild(buildThemeRow(current));
-	settingsView.appendChild(buildSortRow(current));
 	settingsView.appendChild(buildOpacityRow(current));
 
-	settingsView.appendChild(heading("Custom themes"));
+	const customThemesDetails = document.createElement("details");
+	customThemesDetails.className = "settings-collapsible";
+	const customThemesSummary = document.createElement("summary");
+	customThemesSummary.id = sectionId("Custom themes");
+	customThemesSummary.textContent = "Custom themes";
+	customThemesDetails.appendChild(customThemesSummary);
 	const customThemesSection = document.createElement("div");
 	renderCustomThemesSection(customThemesSection, customThemesCache, null);
-	settingsView.appendChild(customThemesSection);
+	customThemesDetails.appendChild(customThemesSection);
+	settingsView.appendChild(customThemesDetails);
 
 	settingsView.appendChild(heading("Capture behavior"));
 	settingsView.appendChild(buildCaptureModeRow(current));
+	settingsView.appendChild(buildSortRow(current));
 	for (const row of buildBehaviorRows(current)) settingsView.appendChild(row);
 	settingsView.appendChild(buildExcludedAppsRow(current));
+
+	settingsView.appendChild(heading("Pinned quick-access"));
+	settingsView.appendChild(buildPinnedItemsSection(current));
 
 	settingsView.appendChild(heading("Visibility"));
 	for (const row of buildVisibilityRows(current)) settingsView.appendChild(row);
@@ -2236,6 +2596,7 @@ async function openSettings(): Promise<void> {
 	settingsView.appendChild(buildAddTemplateForm());
 
 	settingsView.appendChild(heading("Sync"));
+	settingsView.appendChild(buildSyncStatusRow(syncStatus));
 	const syncContainer = document.createElement("div");
 	syncContainer.id = "sync-rows-container";
 	for (const row of buildSyncRows(current)) syncContainer.appendChild(row);
@@ -2282,3 +2643,12 @@ settingsBtn.onclick = () => {
 
 void loadSettings();
 void refresh();
+
+// A misconfigured S3/folder backend used to fail completely silently — an
+// eprintln! to a terminal nobody's watching, with the UI just quietly using
+// local storage forever with no explanation. Surface it once at startup.
+void Store.getSyncStatus().then((status) => {
+	if (status.fallback_reason) {
+		showStatusToast(`Using local storage: ${status.fallback_reason}`, 6000);
+	}
+});

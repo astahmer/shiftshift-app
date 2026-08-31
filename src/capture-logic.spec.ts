@@ -221,7 +221,9 @@ describe("matchSlashSuggestions", () => {
 
 	it("returns everything for a bare slash", () => {
 		const names = matchSlashSuggestions("/", templates).map((s) => s.name);
-		expect(names).toEqual(expect.arrayContaining(["todo", "settings", "light", "dark", "theme", "sort", "history", "standup"]));
+		expect(names).toEqual(
+			expect.arrayContaining(["todo", "settings", "light", "dark", "theme", "sort", "history", "help", "standup"]),
+		);
 	});
 
 	it("returns nothing when no command matches the prefix", () => {
@@ -247,6 +249,10 @@ describe("parseSlashMode", () => {
 
 	it("recognizes /history", () => {
 		expect(parseSlashMode("/history")).toEqual({ type: "history", query: "" });
+	});
+
+	it("recognizes /help", () => {
+		expect(parseSlashMode("/help")).toEqual({ type: "help" });
 	});
 
 	it("does not switch modes on a partial word (e.g. /th before /theme)", () => {

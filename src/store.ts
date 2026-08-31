@@ -49,6 +49,8 @@ export interface Settings {
 	excluded_apps: string[];
 	/** Encrypts the local SQLite store at rest (SQLCipher). Restart required to take effect. */
 	encrypt_local_storage: boolean;
+	/** Item ids pinned to ⌘1-⌘9 (index 0 = slot 1); always 9 entries, "" means unassigned. */
+	pinned_items: string[];
 }
 
 export interface Template {
@@ -101,6 +103,12 @@ export interface CustomTheme {
 export interface LinkPreview {
 	title: string | null;
 	favicon: string | null;
+}
+
+export interface SyncStatus {
+	active_backend: "local" | "s3" | "folder";
+	configured_backend: "local" | "s3" | "folder";
+	fallback_reason: string | null;
 }
 
 /**
@@ -178,6 +186,15 @@ export class Store {
 
 	static fetchLinkPreview(url: string): Promise<LinkPreview> {
 		return invoke("fetch_link_preview", { url });
+	}
+
+	/** Reveals a file in Finder — used for "Share" on image items, since Finder's own Share button has full AirDrop/Mail/Messages access that a spawned process doesn't. */
+	static revealInFinder(path: string): Promise<void> {
+		return invoke("reveal_in_finder", { path });
+	}
+
+	static getSyncStatus(): Promise<SyncStatus> {
+		return invoke("get_sync_status");
 	}
 
 	static getSettings(): Promise<Settings> {

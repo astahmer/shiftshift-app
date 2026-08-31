@@ -433,6 +433,26 @@ button:active {
 .capture-row {
 	display: flex;
 	gap: 6px;
+	position: relative;
+}
+
+.mode-badge {
+	position: absolute;
+	left: 10px;
+	top: 50%;
+	transform: translateY(-50%);
+	background: var(--accent);
+	color: var(--accent-fg);
+	font-size: 9.5px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	padding: 2px 6px;
+	border-radius: 5px;
+	pointer-events: none;
+}
+
+.capture-input.has-mode-badge {
+	padding-left: 62px;
 }
 
 .capture-input {
@@ -535,6 +555,54 @@ button:active {
 	color: var(--muted);
 }
 
+.settings-nav {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	display: flex;
+	gap: 4px;
+	overflow-x: auto;
+	padding: 2px 0 6px;
+	background: var(--bg);
+	margin: -4px 0 0;
+}
+
+.settings-nav-btn {
+	flex: none;
+	padding: 4px 8px;
+	font-size: 10.5px;
+	border-radius: 999px;
+}
+
+.settings-collapsible summary {
+	margin: 8px 0 0;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--muted);
+	cursor: pointer;
+	list-style: none;
+}
+
+.settings-collapsible summary::-webkit-details-marker {
+	display: none;
+}
+
+.settings-collapsible summary::before {
+	content: "▸ ";
+}
+
+.settings-collapsible[open] summary::before {
+	content: "▾ ";
+}
+
+.settings-collapsible > div {
+	margin-top: 4px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
 .settings-row {
 	display: flex;
 	align-items: center;
@@ -630,6 +698,74 @@ button:active {
 
 .template-form input {
 	flex: 1;
+}
+
+.opacity-readout {
+	flex: none;
+	width: 34px;
+	text-align: right;
+	font-size: 11.5px;
+	color: var(--muted);
+}
+
+.help-row {
+	cursor: default;
+}
+
+.help-category {
+	flex: none;
+	width: 76px;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--accent);
+}
+
+.help-shortcut {
+	flex: none;
+	width: 130px;
+	font-family: ui-monospace, monospace;
+	font-size: 11.5px;
+	color: var(--fg);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.help-description {
+	flex: 1;
+	color: var(--muted);
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.empty-state {
+	padding: 24px 12px;
+	text-align: center;
+	color: var(--muted);
+	font-size: 12.5px;
+	line-height: 1.5;
+}
+
+.pinned-item-value {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
+.sync-status-row {
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.sync-status-warning {
+	color: color-mix(in srgb, orange 70%, var(--fg));
 }
 
 .excluded-apps-row {
@@ -938,6 +1074,9 @@ button:active {
 	line-height: 1.4;
 }
 
+/* Also on hover, not just keyboard-selection — a mouse-only user never
+   otherwise sees the shortcuts exist. */
+.item-row:hover .item-action-hint,
 .item-row.selected .item-action-hint {
 	display: inline-flex;
 }

@@ -151,6 +151,7 @@ export const BUILTIN_COMMANDS: Array<{ name: string; hint: string }> = [
 	{ name: "theme", hint: "Switch to a specific theme" },
 	{ name: "sort", hint: "Change list ordering" },
 	{ name: "history", hint: "Show capture history" },
+	{ name: "help", hint: "Show keyboard shortcuts" },
 ];
 
 export interface SlashSuggestion {
@@ -177,7 +178,8 @@ export type SlashMode =
 	| { type: "light" }
 	| { type: "dark" }
 	| { type: "sort"; query: string }
-	| { type: "history"; query: string };
+	| { type: "history"; query: string }
+	| { type: "help" };
 
 /**
  * Which dedicated suggestion view `/`-prefixed input has committed to. Only
@@ -194,8 +196,33 @@ export function parseSlashMode(raw: string): SlashMode {
 	if (sortMatch) return { type: "sort", query: sortMatch[1] ?? "" };
 	const historyMatch = /^\/history(?:\s+(.*))?$/.exec(raw);
 	if (historyMatch) return { type: "history", query: historyMatch[1] ?? "" };
+	if (/^\/help(?:\s|$)/.test(raw)) return { type: "help" };
 	return { type: "commands" };
 }
+
+export const HELP_SHORTCUTS: Array<{ category: string; shortcut: string; description: string }> = [
+	{ category: "Capture", shortcut: "double-tap Shift", description: "Capture the current selection" },
+	{ category: "Capture", shortcut: "⌘Enter", description: "Force-save typed text as a new item" },
+	{ category: "Capture", shortcut: "⌘V", description: "Paste a clipboard image as an image item" },
+	{ category: "Browse", shortcut: "↑ / ↓", description: "Move selection (wraps at both ends)" },
+	{ category: "Browse", shortcut: "Enter", description: "Copy/open the selected item and close" },
+	{ category: "Browse", shortcut: "⌘C", description: "Copy the selected item without closing" },
+	{ category: "Browse", shortcut: "Shift+→", description: "Open the full detail view" },
+	{ category: "Organize", shortcut: "⌘B", description: "Toggle bookmark" },
+	{ category: "Organize", shortcut: "⌘T", description: "Toggle todo/note" },
+	{ category: "Organize", shortcut: "⌘E", description: "Edit inline" },
+	{ category: "Organize", shortcut: "⌥↑ / ⌥↓", description: "Reorder (unfiltered view only)" },
+	{ category: "Organize", shortcut: "⌘⌫", description: "Delete" },
+	{ category: "Organize", shortcut: "⌘Z / ⌘⇧Z", description: "Undo / redo" },
+	{ category: "Multi-select", shortcut: "Shift+Enter", description: "Add to selection" },
+	{ category: "Multi-select", shortcut: "Enter", description: "Copy selection as a numbered list" },
+	{ category: "Multi-select", shortcut: "⌘⌫ / ⌘B / ⌘T", description: "Bulk delete / bookmark / todo-toggle" },
+	{ category: "Pins", shortcut: "⌘1-⌘9", description: "Copy the item pinned to that slot" },
+	{ category: "Pins", shortcut: "⌘⇧1-⌘⇧9", description: "Pin the selected item to that slot" },
+	{ category: "Filters", shortcut: "@tag", description: "Filter by @bookmarks/@links/@todos/@notes" },
+	{ category: "Filters", shortcut: "#tag", description: "Filter/tag by hashtag" },
+	{ category: "Commands", shortcut: "/theme, /sort, /history, /todo", description: "Type / to see all commands" },
+];
 
 export interface ThemeChoice {
 	id: string;
