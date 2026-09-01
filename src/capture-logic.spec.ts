@@ -4,8 +4,11 @@ import {
 	detectKind,
 	expandTemplate,
 	extractTags,
+	emptyTabCopy,
 	filterItems,
 	findDuplicate,
+	itemsForTab,
+	nextListTab,
 	formatRelativeTime,
 	isImportableTheme,
 	lastToken,
@@ -18,6 +21,16 @@ import {
 	parseSlashMode,
 	parseUiCommand,
 	resolveCapture,
+	slashSuggestionIsImmediate,
+	settingsSearchMatches,
+	extendRangeByIds,
+	fileUrlFromPath,
+	itemExternalDragText,
+	rankForDrop,
+	replaceLastToken,
+	applyListDrag,
+	pointerLeftWindow,
+	listDragNeedsSyntheticDown,
 } from "./capture-logic";
 import type { Item, Template } from "./store";
 
@@ -109,6 +122,11 @@ describe("parseUiCommand", () => {
 		expect(parseUiCommand("/settings")).toEqual({ type: "open-settings" });
 	});
 
+	it("runs settings immediately from a highlighted /sett suggestion", () => {
+		expect(slashSuggestionIsImmediate("settings")).toBe(true);
+		expect(slashSuggestionIsImmediate("theme")).toBe(false);
+	});
+
 	it("returns null for anything else, including the now-dedicated theme/sort/history commands", () => {
 		expect(parseUiCommand("/todo buy milk")).toBeNull();
 		expect(parseUiCommand("just text")).toBeNull();
@@ -159,6 +177,33 @@ describe("filterItems", () => {
 
 	it("returns everything for an empty query", () => {
 		expect(filterItems(items, "")).toEqual(items);
+	});
+});
+
+describe("list tabs", () => {
+	const items = [
+		item({ text: "buy milk", kind: "todo" }),
+		item({ text: "https://example.com", kind: "link", bookmarked: true }),
+		item({ text: "shot", kind: "image" }),
+		item({ text: "idea", kind: "note" }),
+	];
+
+	it("scopes the list to the active tab", () => {
+		expect(itemsForTab(items, "recent")).toEqual(items);
+		expect(itemsForTab(items, "bookmarked").map((row) => row.text)).toEqual(["https://example.com"]);
+		expect(itemsForTab(items, "images").map((row) => row.text)).toEqual(["shot"]);
+		expect(itemsForTab(items, "todos").map((row) => row.text)).toEqual(["buy milk"]);
+	});
+
+	it("wraps Tab cycling in both directions", () => {
+		expect(nextListTab("recent", 1)).toBe("bookmarked");
+		expect(nextListTab("todos", 1)).toBe("recent");
+		expect(nextListTab("recent", -1)).toBe("todos");
+	});
+
+	it("uses a filter empty-state when a query is active", () => {
+		expect(emptyTabCopy("todos", true).title).toBe("No matches");
+		expect(emptyTabCopy("todos", false).title).toBe("No TODOs");
 	});
 });
 
@@ -273,6 +318,16 @@ describe("matchThemeSuggestions", () => {
 
 	it("filters by label substring", () => {
 		expect(matchThemeSuggestions("tokyo", themes).map((t) => t.id)).toEqual(["a", "b"]);
+	});
+
+	it("also matches ids and compact labels (win95, windows95)", () => {
+		const os = [
+			{ id: "win95", label: "Windows 95", mode: "light" as const },
+			{ id: "mac", label: "macOS", mode: "light" as const },
+		];
+		expect(matchThemeSuggestions("win95", os).map((t) => t.id)).toEqual(["win95"]);
+		expect(matchThemeSuggestions("windows95", os).map((t) => t.id)).toEqual(["win95"]);
+		expect(matchThemeSuggestions("macos", os).map((t) => t.id)).toEqual(["mac"]);
 	});
 
 	it("filters by mode", () => {
@@ -410,5 +465,215 @@ describe("isImportableTheme", () => {
 	it("rejects non-objects", () => {
 		expect(isImportableTheme(null)).toBe(false);
 		expect(isImportableTheme("not an object")).toBe(false);
+	});
+});
+
+describe("settingsSearchMatches", () => {
+	it("treats dock as related to edge / notch / position", () => {
+		expect(settingsSearchMatches("dock", "Position")).toBe(true);
+		expect(settingsSearchMatches("dock", "Show recent-items dock")).toBe(true);
+		expect(settingsSearchMatches("edge", "Dock notch pill recent")).toBe(true);
+	});
+
+	it("still requires a real relation — unrelated rows stay hidden", () => {
+		expect(settingsSearchMatches("dock", "Encrypt local database")).toBe(false);
+		expect(settingsSearchMatches("theme", "Fallback shortcuts")).toBe(false);
+	});
+
+	it("covers the other settings clusters too", () => {
+		expect(settingsSearchMatches("pin", "Pinned quick-access")).toBe(true);
+		expect(settingsSearchMatches("shortcut", "Fallback shortcuts")).toBe(true);
+		expect(settingsSearchMatches("sync", "Encrypt local database")).toBe(true);
+		expect(settingsSearchMatches("snippet", "Snippet templates")).toBe(true);
+		expect(settingsSearchMatches("font", "Appearance theme look")).toBe(true);
+		expect(settingsSearchMatches("spellcheck", "Autocorrect / spellcheck on the capture input")).toBe(true);
+		expect(settingsSearchMatches("bonjour", "Autocorrect / spellcheck on the capture input")).toBe(true);
+	});
+});
+
+describe("rankForDrop", () => {
+	const a = item({ text: "a", id: "a", rank: 3000 });
+	const b = item({ text: "b", id: "b", rank: 2000 });
+	const c = item({ text: "c", id: "c", rank: 1000 });
+	const visible = [a, b, c];
+
+	it("drops before the first item with a higher rank", () => {
+		const rank = rankForDrop(visible, "c", 0);
+		expect(rank).toBeGreaterThan(a.rank);
+	});
+
+	it("drops between two neighbors", () => {
+		const rank = rankForDrop(visible, "c", 1);
+		expect(rank).toBeGreaterThan(b.rank);
+		expect(rank).toBeLessThan(a.rank);
+	});
+
+	it("drops after the last item with a lower rank", () => {
+		const rank = rankForDrop(visible, "a", 3);
+		expect(rank).toBeLessThan(c.rank);
+	});
+
+	it("adjusts the insert index when the dragged row sits before the target", () => {
+		const rank = rankForDrop(visible, "a", 2);
+		expect(rank).toBeGreaterThan(c.rank);
+		expect(rank).toBeLessThan(b.rank);
+	});
+});
+
+describe("list drag gesture e2e", () => {
+	it("keeps a note in-list so it can be rearranged", () => {
+		let state = applyListDrag(null, { type: "down", id: "a", index: 0, x: 10, y: 10 }).state;
+		const start = applyListDrag(state, { type: "move", x: 10, y: 40, overIndex: 2, leftWindow: false });
+		expect(start.effect).toEqual({ type: "reorder", overIndex: 2 });
+		state = start.state;
+		const up = applyListDrag(state, { type: "up" });
+		expect(up.effect).toEqual({ type: "commit", id: "a", from: 0, over: 2 });
+		expect(up.state).toBeNull();
+	});
+
+	it("does not start an external drag on the first move", () => {
+		const state = applyListDrag(null, { type: "down", id: "note", index: 1, x: 20, y: 20 }).state;
+		const move = applyListDrag(state, { type: "move", x: 24, y: 22, overIndex: 1, leftWindow: false });
+		expect(move.effect).toEqual({ type: "none" });
+		expect(move.state?.live).toBe(false);
+	});
+
+	it("starts an external drag only after the pointer leaves the window", () => {
+		let state = applyListDrag(null, { type: "down", id: "note", index: 0, x: 10, y: 10 }).state;
+		state = applyListDrag(state, { type: "move", x: 10, y: 30, overIndex: 0, leftWindow: false }).state;
+		expect(state?.live).toBe(true);
+		const leave = applyListDrag(state, { type: "move", x: -4, y: 30, overIndex: 0, leftWindow: true });
+		expect(leave.effect).toEqual({ type: "external", id: "note" });
+		expect(leave.state).toBeNull();
+	});
+
+	it("starts an external drag on pointerleave after the gesture is live", () => {
+		let state = applyListDrag(null, { type: "down", id: "link", index: 2, x: 8, y: 8 }).state;
+		state = applyListDrag(state, { type: "move", x: 8, y: 40, overIndex: 2, leftWindow: false }).state;
+		const leave = applyListDrag(state, { type: "leave" });
+		expect(leave.effect).toEqual({ type: "external", id: "link" });
+	});
+
+	it("starts an external drag when the pointer leaves before the 8px threshold", () => {
+		const state = applyListDrag(null, { type: "down", id: "note", index: 0, x: 2, y: 2 }).state;
+		const leave = applyListDrag(state, { type: "move", x: -1, y: 2, overIndex: 0, leftWindow: true });
+		expect(leave.effect).toEqual({ type: "external", id: "note" });
+	});
+
+	it("starts an external drag on pointerleave even before the gesture is live", () => {
+		const state = applyListDrag(null, { type: "down", id: "note", index: 0, x: 4, y: 4 }).state;
+		const leave = applyListDrag(state, { type: "leave" });
+		expect(leave.effect).toEqual({ type: "external", id: "note" });
+	});
+
+	it("does not treat a click as reorder or drag-out", () => {
+		const state = applyListDrag(null, { type: "down", id: "a", index: 0, x: 10, y: 10 }).state;
+		const up = applyListDrag(state, { type: "up" });
+		expect(up.effect).toEqual({ type: "none" });
+	});
+
+	it("uses the same leave geometry for both panels", () => {
+		expect(pointerLeftWindow(-1, 10, 400, 300)).toBe(true);
+		expect(pointerLeftWindow(10, 10, 400, 300)).toBe(false);
+		expect(pointerLeftWindow(401, 10, 400, 300)).toBe(true);
+	});
+
+	it("recovers a missed pointerdown when the window was unfocused", () => {
+		expect(listDragNeedsSyntheticDown(null, 1)).toBe(true);
+		expect(listDragNeedsSyntheticDown(null, 0)).toBe(false);
+		const state = applyListDrag(null, { type: "down", id: "a", index: 0, x: 1, y: 1 }).state;
+		expect(listDragNeedsSyntheticDown(state, 1)).toBe(false);
+	});
+
+	it("turns a recovered press into drag-out as soon as the pointer leaves", () => {
+		let state = applyListDrag(null, { type: "down", id: "note", index: 0, x: 2, y: 2 }).state;
+		const out = applyListDrag(state, { type: "move", x: -2, y: 2, overIndex: 0, leftWindow: true });
+		expect(out.effect).toEqual({ type: "external", id: "note" });
+		state = applyListDrag(null, { type: "down", id: "note", index: 0, x: 2, y: 2 }).state;
+		const leave = applyListDrag(state, { type: "leave" });
+		expect(leave.effect).toEqual({ type: "external", id: "note" });
+	});
+
+	it("does not commit a drop on the same row", () => {
+		let state = applyListDrag(null, { type: "down", id: "b", index: 1, x: 10, y: 10 }).state;
+		state = applyListDrag(state, { type: "move", x: 10, y: 40, overIndex: 1, leftWindow: false }).state;
+		const up = applyListDrag(state, { type: "up" });
+		expect(up.effect).toEqual({ type: "none" });
+	});
+});
+
+describe("item drag payload", () => {
+	it("uses the note text for text fields", () => {
+		expect(itemExternalDragText(item({ text: "hello" }))).toBe("hello");
+	});
+
+	it("uses the URL for links", () => {
+		expect(itemExternalDragText(item({ text: "https://welii.com", kind: "link" }))).toBe("https://welii.com");
+	});
+
+	it("uses the file name for images", () => {
+		expect(itemExternalDragText(item({ text: "/tmp/shots/shot.png", kind: "image" }))).toBe("shot.png");
+	});
+
+	it("builds a file URL from an absolute path", () => {
+		expect(fileUrlFromPath("/tmp/shots/shot.png")).toBe("file:///tmp/shots/shot.png");
+	});
+});
+
+describe("extendRangeByIds", () => {
+	const ids = ["a", "b", "c", "d", "e"];
+
+	it("starts a range from the cursor and selects the item walked onto", () => {
+		expect(extendRangeByIds(ids, null, "b", 1)).toEqual({
+			selectedIds: ["b", "c"],
+			anchorId: "b",
+			cursorId: "c",
+		});
+	});
+
+	it("unselects items when walking back toward the anchor", () => {
+		const down = extendRangeByIds(ids, "b", "c", 1);
+		expect(down?.selectedIds).toEqual(["b", "c", "d"]);
+		expect(extendRangeByIds(ids, down!.anchorId, down!.cursorId, -1)).toEqual({
+			selectedIds: ["b", "c"],
+			anchorId: "b",
+			cursorId: "c",
+		});
+	});
+
+	it("grows the range upward from a later anchor", () => {
+		expect(extendRangeByIds(ids, null, "c", -1)).toEqual({
+			selectedIds: ["b", "c"],
+			anchorId: "c",
+			cursorId: "b",
+		});
+	});
+
+	it("clamps at the ends instead of wrapping", () => {
+		expect(extendRangeByIds(ids, "a", "a", -1)).toEqual({
+			selectedIds: ["a"],
+			anchorId: "a",
+			cursorId: "a",
+		});
+		expect(extendRangeByIds(ids, "e", "e", 1)).toEqual({
+			selectedIds: ["e"],
+			anchorId: "e",
+			cursorId: "e",
+		});
+	});
+
+	it("returns null for an empty list", () => {
+		expect(extendRangeByIds([], null, null, 1)).toBeNull();
+	});
+});
+
+describe("replaceLastToken", () => {
+	it("completes a lone @ or # token", () => {
+		expect(replaceLastToken("@to", "@todos")).toBe("@todos ");
+		expect(replaceLastToken("#ta", "#tag")).toBe("#tag ");
+	});
+
+	it("replaces only the last word of a query", () => {
+		expect(replaceLastToken("ship @to", "@todos")).toBe("ship @todos ");
 	});
 });
