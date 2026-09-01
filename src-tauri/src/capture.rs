@@ -53,7 +53,10 @@ pub enum CaptureMode {
 
 impl Default for Bindings {
     fn default() -> Self {
-        Self { left: Action::Capture, right: Action::TogglePanel }
+        Self {
+            left: Action::Capture,
+            right: Action::TogglePanel,
+        }
     }
 }
 
@@ -82,6 +85,12 @@ pub(crate) enum Fired {
 /// would both be blocked by `CAPTURING` below and needlessly re-simulate the
 /// copy chord.
 static LAST_CAPTURE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
+/// Fingerprint of the last image double-shift saved — the image stays on
+/// the clipboard after a capture, so a second gesture would otherwise
+/// write the same PNG again. Dedicated image shortcut / paste still
+/// always saves (they go through `images::capture_clipboard_image` directly).
+static LAST_IMAGE_FINGERPRINT: Mutex<Option<u64>> = Mutex::new(None);
 
 /// How long a promotion request still counts as "for that capture" — must
 /// comfortably exceed `do_capture`'s own worst-case latency (60ms settle +
@@ -152,7 +161,8 @@ pub fn start_double_shift_listener(app: AppHandle) {
                     last_tap = None;
                 }
                 EventType::KeyRelease(Key::ShiftLeft) | EventType::KeyRelease(Key::ShiftRight) => {
-                    let side = if matches!(event.event_type, EventType::KeyRelease(Key::ShiftLeft)) {
+                    let side = if matches!(event.event_type, EventType::KeyRelease(Key::ShiftLeft))
+                    {
                         Side::Left
                     } else {
                         Side::Right
@@ -169,7 +179,8 @@ pub fn start_double_shift_listener(app: AppHandle) {
                         return;
                     }
                     if let Some((prev_side, prev_at, prev_action)) = last_double {
-                        if prev_side == side && now.saturating_duration_since(prev_at) < TAP_WINDOW {
+                        if prev_side == side && now.saturating_duration_since(prev_at) < TAP_WINDOW
+                        {
                             last_double = None;
                             last_tap = None;
                             if prev_action == Action::Capture {
@@ -181,7 +192,12 @@ pub fn start_double_shift_listener(app: AppHandle) {
                     if let Some((s, t)) = last_tap {
                         if s == side && t.elapsed() < TAP_WINDOW {
                             last_tap = None;
-                            let bindings = app.state::<settings::SettingsState>().0.lock().unwrap().bindings;
+                            let bindings = app
+                                .state::<settings::SettingsState>()
+                                .0
+                                .lock()
+                                .unwrap()
+                                .bindings;
                             let action = action_for(bindings, side);
                             last_double = Some((side, now, action));
                             run_action(&app, action);
@@ -207,7 +223,12 @@ pub fn start_double_shift_listener(app: AppHandle) {
 /// Accelerators are user-configurable from the settings screen (persisted as
 /// `fallback_toggle`/`fallback_capture`); see `reregister_fallback_shortcuts`
 /// for changing them at runtime.
-pub fn register_fallback_shortcuts(app: &AppHandle, toggle: &str, capture: &str, image: &str) -> Result<(), String> {
+pub fn register_fallback_shortcuts(
+    app: &AppHandle,
+    toggle: &str,
+    capture: &str,
+    image: &str,
+) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
     let gs = app.global_shortcut();
@@ -277,6 +298,32 @@ pub fn capture_selection(app: &AppHandle) {
 }
 
 fn do_capture(app: &AppHandle) -> Result<(), String> {
+    // Image-on-clipboard wins over the text-copy dance: simulating ⌘C
+    // would clobber the image before we could read it. Double-shift with
+    // a screenshot already on the clipboard is how people expect this
+    // to work; the dedicated image shortcut stays as a fallback.
+    if let Some(fingerprint) = crate::images::clipboard_image_fingerprint() {
+        if LAST_IMAGE_FINGERPRINT.lock().unwrap().as_ref() == Some(&fingerprint) {
+            return Ok(());
+        }
+        match crate::images::capture_clipboard_image(app) {
+            Ok(_) => {
+                *LAST_IMAGE_FINGERPRINT.lock().unwrap() = Some(fingerprint);
+                let mode = app
+                    .state::<settings::SettingsState>()
+                    .0
+                    .lock()
+                    .unwrap()
+                    .capture_mode;
+                if mode == CaptureMode::Open {
+                    panel::show(app);
+                }
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
     // Read before the copy chord fires — the frontmost app shouldn't change
     // during that, but there's no reason to risk the race.
     let source_app = frontmost_app_name();
@@ -307,6 +354,7 @@ fn do_capture(app: &AppHandle) -> Result<(), String> {
             handle_captured_text(app, text.trim(), source_app)?;
         }
         None => {
+            crate::toast::hide(app);
             restore(&mut clip, old);
         }
     }
@@ -321,7 +369,9 @@ fn do_capture(app: &AppHandle) -> Result<(), String> {
 /// favicon/title fetch, or click-to-open behavior.
 pub(crate) fn detect_kind(text: &str) -> crate::store::ItemKind {
     let trimmed = text.trim();
-    let rest = trimmed.strip_prefix("https://").or_else(|| trimmed.strip_prefix("http://"));
+    let rest = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"));
     let is_bare_url = matches!(rest, Some(r) if !r.is_empty() && !r.contains(char::is_whitespace));
     if is_bare_url {
         crate::store::ItemKind::Link
@@ -378,10 +428,19 @@ fn restore(clip: &mut arboard::Clipboard, old: Option<String>) {
 /// saved text: whatever backend just captured this became the clipboard
 /// contents at some point on the way in, and treating it as "already seen"
 /// stops clipboard-watch from re-capturing it as a second, duplicate item.
-pub(crate) fn handle_captured_text(app: &AppHandle, text: &str, source_app: Option<String>) -> Result<(), String> {
+pub(crate) fn handle_captured_text(
+    app: &AppHandle,
+    text: &str,
+    source_app: Option<String>,
+) -> Result<(), String> {
     crate::clipboard_watch::note_own_write(text);
 
-    let mode = app.state::<settings::SettingsState>().0.lock().unwrap().capture_mode;
+    let mode = app
+        .state::<settings::SettingsState>()
+        .0
+        .lock()
+        .unwrap()
+        .capture_mode;
     if mode == CaptureMode::Draft {
         let _ = app.emit("draft-capture", text);
         panel::show(app);
@@ -391,7 +450,9 @@ pub(crate) fn handle_captured_text(app: &AppHandle, text: &str, source_app: Opti
     let db = app.state::<db::Db>();
     let item = db.store.add_item(text, detect_kind(text), source_app)?;
     *LAST_CAPTURE.lock().unwrap() = Some((item.id.clone(), Instant::now()));
-    let _ = db.store.log_event(Some(&item.id), "created", Some(&item.text));
+    let _ = db
+        .store
+        .log_event(Some(&item.id), "created", Some(&item.text));
     let _ = app.emit("refresh", ());
     let _ = app.emit("captured", ());
     crate::notify::notify_captured(app, &item);
@@ -406,37 +467,83 @@ pub(crate) fn handle_captured_text(app: &AppHandle, text: &str, source_app: Opti
 /// and aborts the process otherwise (the same rule that makes rdev unusable
 /// on macOS, see `mac_tap.rs`).
 fn send_copy(app: &AppHandle) -> Result<(), String> {
+    send_mod_letter(app, 'c')
+}
+
+/// Pastes into whichever app is frontmost — used after `panel::hide`
+/// restores the previous app, so Enter-on-a-highlighted-item can land the
+/// copied text where the user was typing (see `HighlightSubmit::CopyHideWrite`).
+pub(crate) fn send_paste(app: &AppHandle) -> Result<(), String> {
+    send_mod_letter(app, 'v')
+}
+
+fn send_mod_letter(app: &AppHandle, letter: char) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let _ = tx.send(press_copy_chord());
+            let _ = tx.send(press_mod_letter(letter));
         })
         .map_err(|e| e.to_string())?;
         rx.recv_timeout(Duration::from_secs(3))
-            .map_err(|_| "timed out sending the copy chord".to_string())?
+            .map_err(|_| format!("timed out sending the {letter} chord"))?
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
-        press_copy_chord()
+        press_mod_letter(letter)
     }
 }
 
 #[allow(dead_code)]
 fn press_copy_chord() -> Result<(), String> {
+    press_mod_letter('c')
+}
+
+fn press_mod_letter(letter: char) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         use enigo::{Direction, Enigo, Key, Keyboard, Settings};
         let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
-        enigo.key(Key::Meta, Direction::Press).map_err(|e| e.to_string())?;
-        enigo.key(Key::Unicode('c'), Direction::Click).map_err(|e| e.to_string())?;
-        enigo.key(Key::Meta, Direction::Release).map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Meta, Direction::Press)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Unicode(letter), Direction::Click)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Meta, Direction::Release)
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
+    // Windows/Linux both use Ctrl+letter, and `rdev::simulate` already covers
+    // both from one call (it's the same crate `start_double_shift_listener`
+    // uses to *detect* the gesture on these platforms — this is the
+    // *sending* side). Linux specifically: XTest-based, X11 only, per
+    // rdev's own doc comment — a no-op under Wayland, same as the gesture
+    // listener itself (see that function's doc comment).
     #[cfg(not(target_os = "macos"))]
     {
-        Err("copy-chord simulation not yet wired up for this platform".to_string())
+        use rdev::{simulate, EventType, Key};
+        use std::{thread, time::Duration};
+        let key = match letter {
+            'c' => Key::KeyC,
+            'v' => Key::KeyV,
+            other => return Err(format!("unsupported mod-letter {other:?}")),
+        };
+        let step = |event: EventType| -> Result<(), String> {
+            simulate(&event).map_err(|e| format!("{e:?}"))?;
+            // rdev's own examples sleep between events — the OS needs a
+            // moment to register each one before the next, or fast presses
+            // can be dropped/merged.
+            thread::sleep(Duration::from_millis(20));
+            Ok(())
+        };
+        step(EventType::KeyPress(Key::ControlLeft))?;
+        step(EventType::KeyPress(key))?;
+        step(EventType::KeyRelease(key))?;
+        step(EventType::KeyRelease(Key::ControlLeft))?;
+        Ok(())
     }
 }
 
@@ -444,6 +551,23 @@ fn press_copy_chord() -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::store::ItemKind;
+
+    /// Real end-to-end check of `press_copy_chord`'s Linux path — needs an
+    /// actual X11 display with `scripts/linux-test-selection.py` running
+    /// and focused (a plain window manager-less Ctrl+C would otherwise go
+    /// nowhere). Not run by default; see `scripts/linux-test.sh`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs a real X11 display + scripts/linux-test-selection.py — run via scripts/linux-test.sh"]
+    fn press_copy_chord_copies_a_real_x11_selection() {
+        let mut clip = arboard::Clipboard::new().expect("clipboard");
+        clip.set_text("sentinel-before-copy")
+            .expect("seed clipboard");
+        press_copy_chord().expect("simulate ctrl+c");
+        std::thread::sleep(Duration::from_millis(300));
+        let got = clip.get_text().expect("read clipboard after copy");
+        assert_eq!(got, "shiftshift-x11-integration-test");
+    }
 
     #[test]
     fn classifies_a_bare_url_as_a_link() {
@@ -458,7 +582,10 @@ mod tests {
 
     #[test]
     fn does_not_classify_a_url_embedded_in_a_sentence_as_a_link() {
-        assert_eq!(detect_kind("see https://example.com for details"), ItemKind::Note);
+        assert_eq!(
+            detect_kind("see https://example.com for details"),
+            ItemKind::Note
+        );
     }
 
     #[test]
