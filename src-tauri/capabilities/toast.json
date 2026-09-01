@@ -1,0 +1,12 @@
+{
+	"$schema": "../gen/schemas/desktop-schema.json",
+	"identifier": "toast",
+	"description": "Capabilities for the small standalone toast window (Settings -> Notifications -> Ours)",
+	"windows": ["toast"],
+	"permissions": [
+		"core:default",
+		"core:window:allow-show",
+		"core:window:allow-hide",
+		"core:window:allow-start-dragging"
+	]
+}
