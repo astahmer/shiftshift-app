@@ -1,0 +1,222 @@
+import type { Item } from "./store";
+
+export function formatHeaderCount(n: number): string {
+	if (n < 1000) return String(n);
+	if (n < 10_000) {
+		const tenths = Math.round(n / 100);
+		return `${tenths % 10 === 0 ? String(tenths / 10) : (tenths / 10).toFixed(1)}k`;
+	}
+	if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+	const tenths = Math.round(n / 100_000);
+	return `${tenths % 10 === 0 ? String(tenths / 10) : (tenths / 10).toFixed(1)}M`;
+}
+
+export function pointerOnScrollbar(el: HTMLElement, clientX: number): boolean {
+	return clientX >= el.getBoundingClientRect().right - 10;
+}
+
+export const NOTCH_PAGE_SIZE = 40;
+
+export function nextNotchLoadedCount(loaded: number, total: number, page = NOTCH_PAGE_SIZE): number {
+	return Math.min(total, Math.max(loaded, 0) + page);
+}
+
+/**
+ * Arrow through a paged list without jumping to the last of 10k items.
+ * Down past the loaded window grows by a page; up from the first row wraps
+ * to the last *loaded* row, not the last item in the store.
+ */
+export function stepLoadedSelection(
+	selected: number,
+	loaded: number,
+	total: number,
+	delta: number,
+	page = NOTCH_PAGE_SIZE,
+): { selected: number; loaded: number } {
+	if (total <= 0) return { selected: -1, loaded: 0 };
+	let nextLoaded = Math.min(Math.max(loaded, 0), total);
+	if (nextLoaded === 0) nextLoaded = Math.min(page, total);
+	if (selected < 0) {
+		return delta > 0 ? { selected: 0, loaded: nextLoaded } : { selected: nextLoaded - 1, loaded: nextLoaded };
+	}
+	const next = selected + delta;
+	if (next >= nextLoaded) {
+		if (nextLoaded < total) {
+			return { selected: nextLoaded, loaded: Math.min(total, nextLoaded + page) };
+		}
+		return { selected: 0, loaded: nextLoaded };
+	}
+	if (next < 0) return { selected: nextLoaded - 1, loaded: nextLoaded };
+	return { selected: next, loaded: nextLoaded };
+}
+
+export function notchShouldLoadMore(
+	scrollTop: number,
+	clientHeight: number,
+	scrollHeight: number,
+	loaded: number,
+	total: number,
+	threshold = 48,
+): boolean {
+	if (loaded >= total) return false;
+	return scrollTop + clientHeight >= scrollHeight - threshold;
+}
+
+export type HoverActionId = "bookmark" | "todo" | "edit" | "share" | "delete";
+
+export interface HoverActionDef {
+	id: HoverActionId;
+	title: string;
+	glyph: string;
+	hint: string;
+}
+
+export function hoverActionDefs(item: Item): HoverActionDef[] {
+	const actions: HoverActionDef[] = [
+		{ id: "bookmark", title: "Bookmark", glyph: item.bookmarked ? "★" : "☆", hint: "⌘B" },
+	];
+	if (item.kind !== "image") {
+		const isTodo = item.kind === "todo";
+		actions.push({
+			id: "todo",
+			title: isTodo ? "Remove from todos" : "Convert to todo",
+			glyph: isTodo ? "▢" : "☑",
+			hint: "⌘T",
+		});
+		actions.push({ id: "edit", title: "Edit", glyph: "✎", hint: "⌘E" });
+	}
+	actions.push({ id: "share", title: "Share", glyph: "⤴", hint: "⌘⇧S" });
+	actions.push({ id: "delete", title: "Delete", glyph: "🗑", hint: "⌫" });
+	return actions;
+}
+
+export type ContextEntry = { type: "sep" } | { type: "item"; id: string; label: string; hint?: string };
+
+export function itemContextEntries(item: Item, opts: { inSelection: boolean; selectionCount: number }): ContextEntry[] {
+	const entries: ContextEntry[] = hoverActionDefs(item).map((action) => ({
+		type: "item" as const,
+		id: action.id,
+		label: action.title,
+		hint: action.hint,
+	}));
+	entries.push({ type: "sep" });
+	entries.push(
+		opts.inSelection
+			? { type: "item", id: "deselect", label: "Remove from selection" }
+			: { type: "item", id: "select", label: "Add to selection", hint: "⌃Space" },
+	);
+	entries.push({ type: "item", id: "select_all", label: "Select all" });
+	if (opts.selectionCount > 0) {
+		entries.push({ type: "sep" });
+		entries.push({
+			type: "item",
+			id: "copy_selection",
+			label: `Copy selection (${opts.selectionCount})`,
+			hint: "⏎",
+		});
+		entries.push({ type: "item", id: "bookmark_selection", label: "Bookmark selected", hint: "⌘B" });
+		entries.push({ type: "item", id: "todo_selection", label: "Convert selected to todos", hint: "⌘T" });
+		entries.push({ type: "item", id: "delete_selection", label: "Delete selected", hint: "⌘⌫" });
+	}
+	return entries;
+}
+
+export function buildHoverActions(
+	item: Item,
+	onAction: (id: HoverActionId, event: MouseEvent) => void,
+	isBusy?: () => boolean,
+): HTMLElement {
+	const actions = document.createElement("div");
+	actions.className = "item-actions";
+	for (const def of hoverActionDefs(item)) {
+		const button = document.createElement("button");
+		button.type = "button";
+		button.className = `item-action item-${def.id}`;
+		button.title = def.title;
+		button.setAttribute("aria-label", def.title);
+		button.addEventListener("pointerdown", (event) => {
+			event.stopPropagation();
+		});
+		button.onclick = (event) => {
+			event.stopPropagation();
+			if (isBusy?.()) {
+				event.preventDefault();
+				return;
+			}
+			onAction(def.id, event);
+		};
+		const hint = document.createElement("span");
+		hint.className = "item-action-hint";
+		hint.textContent = def.hint;
+		button.appendChild(hint);
+		const icon = document.createElement("span");
+		icon.textContent = def.glyph;
+		button.appendChild(icon);
+		actions.appendChild(button);
+	}
+	return actions;
+}
+
+let openMenu: HTMLElement | null = null;
+
+export function closeItemContextMenu(): void {
+	openMenu?.remove();
+	openMenu = null;
+}
+
+export function openItemContextMenu(event: MouseEvent, entries: ContextEntry[], onPick: (id: string) => void): void {
+	event.preventDefault();
+	closeItemContextMenu();
+	const menu = document.createElement("div");
+	menu.className = "item-context-menu";
+	menu.role = "menu";
+	for (const entry of entries) {
+		if (entry.type === "sep") {
+			const sep = document.createElement("div");
+			sep.className = "item-context-sep";
+			menu.appendChild(sep);
+			continue;
+		}
+		const button = document.createElement("button");
+		button.type = "button";
+		button.className = "item-context-item";
+		button.role = "menuitem";
+		const label = document.createElement("span");
+		label.textContent = entry.label;
+		button.appendChild(label);
+		if (entry.hint) {
+			const hint = document.createElement("span");
+			hint.className = "item-context-hint";
+			hint.textContent = entry.hint;
+			button.appendChild(hint);
+		}
+		button.onclick = (click) => {
+			click.stopPropagation();
+			closeItemContextMenu();
+			onPick(entry.id);
+		};
+		menu.appendChild(button);
+	}
+	document.body.appendChild(menu);
+	const pad = 8;
+	const left = Math.min(event.clientX, window.innerWidth - menu.offsetWidth - pad);
+	const top = Math.min(event.clientY, window.innerHeight - menu.offsetHeight - pad);
+	menu.style.left = `${Math.max(pad, left)}px`;
+	menu.style.top = `${Math.max(pad, top)}px`;
+	openMenu = menu;
+	const dismiss = (next: Event): void => {
+		if (next instanceof MouseEvent && menu.contains(next.target as Node)) return;
+		closeItemContextMenu();
+		window.removeEventListener("pointerdown", dismiss, true);
+		window.removeEventListener("keydown", onKey);
+		window.removeEventListener("blur", dismiss);
+	};
+	const onKey = (next: KeyboardEvent): void => {
+		if (next.key === "Escape") dismiss(next);
+	};
+	queueMicrotask(() => {
+		window.addEventListener("pointerdown", dismiss, true);
+		window.addEventListener("keydown", onKey);
+		window.addEventListener("blur", dismiss);
+	});
+}
