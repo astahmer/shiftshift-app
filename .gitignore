@@ -1,9 +1,11 @@
 node_modules/
 dist/
+.backups/
 src-tauri/target/
 src-tauri/gen/
 .DS_Store
 *.sqlite3
+__pycache__/
 result
 result-*
 .direnv/
