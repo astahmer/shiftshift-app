@@ -31,32 +31,69 @@ impl Db {
         std::fs::create_dir_all(app_data_dir).map_err(|e| e.to_string())?;
         if settings.backend == "s3" {
             match S3Store::open(&settings.s3) {
-                Ok(store) => return Ok(Self { store: Arc::new(store), active_backend: "s3".to_string(), fallback_reason: None }),
+                Ok(store) => {
+                    return Ok(Self {
+                        store: Arc::new(store),
+                        active_backend: "s3".to_string(),
+                        fallback_reason: None,
+                    })
+                }
                 Err(e) => {
-                    eprintln!("shiftshift: S3 backend unavailable ({e}), falling back to local storage");
-                    return Self::open_local_fallback(app_data_dir, settings, format!("S3 backend unavailable: {e}"));
+                    eprintln!(
+                        "shiftshift: S3 backend unavailable ({e}), falling back to local storage"
+                    );
+                    return Self::open_local_fallback(
+                        app_data_dir,
+                        settings,
+                        format!("S3 backend unavailable: {e}"),
+                    );
                 }
             }
         }
         if settings.backend == "folder" {
             match FolderStore::open(&settings.folder_path) {
-                Ok(store) => return Ok(Self { store: Arc::new(store), active_backend: "folder".to_string(), fallback_reason: None }),
+                Ok(store) => {
+                    return Ok(Self {
+                        store: Arc::new(store),
+                        active_backend: "folder".to_string(),
+                        fallback_reason: None,
+                    })
+                }
                 Err(e) => {
                     eprintln!("shiftshift: folder backend unavailable ({e}), falling back to local storage");
-                    return Self::open_local_fallback(app_data_dir, settings, format!("Folder backend unavailable: {e}"));
+                    return Self::open_local_fallback(
+                        app_data_dir,
+                        settings,
+                        format!("Folder backend unavailable: {e}"),
+                    );
                 }
             }
         }
         let store = Self::open_local(app_data_dir, settings)?;
-        Ok(Self { store: Arc::new(store), active_backend: "local".to_string(), fallback_reason: None })
+        Ok(Self {
+            store: Arc::new(store),
+            active_backend: "local".to_string(),
+            fallback_reason: None,
+        })
     }
 
-    fn open_local_fallback(app_data_dir: &std::path::Path, settings: &Settings, reason: String) -> Result<Self, String> {
+    fn open_local_fallback(
+        app_data_dir: &std::path::Path,
+        settings: &Settings,
+        reason: String,
+    ) -> Result<Self, String> {
         let store = Self::open_local(app_data_dir, settings)?;
-        Ok(Self { store: Arc::new(store), active_backend: "local".to_string(), fallback_reason: Some(reason) })
+        Ok(Self {
+            store: Arc::new(store),
+            active_backend: "local".to_string(),
+            fallback_reason: Some(reason),
+        })
     }
 
-    fn open_local(app_data_dir: &std::path::Path, settings: &Settings) -> Result<LocalSqliteStore, String> {
+    fn open_local(
+        app_data_dir: &std::path::Path,
+        settings: &Settings,
+    ) -> Result<LocalSqliteStore, String> {
         let db_path = app_data_dir.join("shiftshift.sqlite3");
         if settings.encrypt_local_storage {
             let key = crate::db_encryption::get_or_create_key()?;

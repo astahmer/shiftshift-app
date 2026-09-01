@@ -24,9 +24,16 @@ pub struct LinkPreview {
 }
 
 pub fn fetch(url: &str) -> Result<LinkPreview, String> {
-    let response = ureq::get(url).timeout(Duration::from_secs(5)).call().map_err(|e| e.to_string())?;
+    let response = ureq::get(url)
+        .timeout(Duration::from_secs(5))
+        .call()
+        .map_err(|e| e.to_string())?;
     let mut body = String::new();
-    response.into_reader().take(MAX_BODY_BYTES).read_to_string(&mut body).map_err(|e| e.to_string())?;
+    response
+        .into_reader()
+        .take(MAX_BODY_BYTES)
+        .read_to_string(&mut body)
+        .map_err(|e| e.to_string())?;
     let title = extract_title(&body);
     let favicon = extract_favicon(&body, url).or_else(|| default_favicon(url));
     Ok(LinkPreview { title, favicon })
@@ -46,7 +53,11 @@ fn extract_title(html: &str) -> Option<String> {
 }
 
 fn decode_entities(s: &str) -> String {
-    s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
 }
 
 /// Scans `<link>` tags for one whose `rel` mentions "icon" (covers `icon`,
@@ -56,12 +67,16 @@ fn extract_favicon(html: &str, page_url: &str) -> Option<String> {
     let mut search_from = 0;
     while let Some(rel_pos) = lower[search_from..].find("rel=") {
         let abs_rel = search_from + rel_pos;
-        let Some(tag_start) = lower[..abs_rel].rfind('<') else { break };
+        let Some(tag_start) = lower[..abs_rel].rfind('<') else {
+            break;
+        };
         if !lower[tag_start..].starts_with("<link") {
             search_from = abs_rel + 4;
             continue;
         }
-        let Some(tag_end) = lower[abs_rel..].find('>').map(|i| abs_rel + i) else { break };
+        let Some(tag_end) = lower[abs_rel..].find('>').map(|i| abs_rel + i) else {
+            break;
+        };
         if lower[tag_start..tag_end].contains("icon") {
             if let Some(href) = extract_attr(&html[tag_start..tag_end], "href") {
                 return Some(resolve_url(page_url, &href));
@@ -95,7 +110,11 @@ fn resolve_url(page_url: &str, href: &str) -> String {
         return href.to_string();
     }
     if let Some(rest) = href.strip_prefix("//") {
-        let scheme = if page_url.starts_with("https://") { "https" } else { "http" };
+        let scheme = if page_url.starts_with("https://") {
+            "https"
+        } else {
+            "http"
+        };
         return format!("{scheme}://{rest}");
     }
     if let Some(origin) = origin_of(page_url) {
@@ -123,17 +142,26 @@ mod tests {
 
     #[test]
     fn extracts_a_simple_title() {
-        assert_eq!(extract_title("<html><head><title>Hello World</title></head></html>"), Some("Hello World".to_string()));
+        assert_eq!(
+            extract_title("<html><head><title>Hello World</title></head></html>"),
+            Some("Hello World".to_string())
+        );
     }
 
     #[test]
     fn extracts_a_title_with_attributes_on_the_tag() {
-        assert_eq!(extract_title("<title lang=\"en\">Hi</title>"), Some("Hi".to_string()));
+        assert_eq!(
+            extract_title("<title lang=\"en\">Hi</title>"),
+            Some("Hi".to_string())
+        );
     }
 
     #[test]
     fn decodes_common_html_entities_in_the_title() {
-        assert_eq!(extract_title("<title>Fish &amp; Chips</title>"), Some("Fish & Chips".to_string()));
+        assert_eq!(
+            extract_title("<title>Fish &amp; Chips</title>"),
+            Some("Fish & Chips".to_string())
+        );
     }
 
     #[test]
@@ -149,29 +177,44 @@ mod tests {
     #[test]
     fn extracts_an_absolute_favicon_href() {
         let html = r#"<link rel="icon" href="https://cdn.example.com/f.png">"#;
-        assert_eq!(extract_favicon(html, "https://example.com/page"), Some("https://cdn.example.com/f.png".to_string()));
+        assert_eq!(
+            extract_favicon(html, "https://example.com/page"),
+            Some("https://cdn.example.com/f.png".to_string())
+        );
     }
 
     #[test]
     fn resolves_a_root_relative_favicon_href() {
         let html = r#"<link rel="shortcut icon" href="/f.ico">"#;
-        assert_eq!(extract_favicon(html, "https://example.com/page"), Some("https://example.com/f.ico".to_string()));
+        assert_eq!(
+            extract_favicon(html, "https://example.com/page"),
+            Some("https://example.com/f.ico".to_string())
+        );
     }
 
     #[test]
     fn resolves_a_protocol_relative_favicon_href() {
         let html = r#"<link rel="icon" href="//cdn.example.com/f.png">"#;
-        assert_eq!(extract_favicon(html, "https://example.com/page"), Some("https://cdn.example.com/f.png".to_string()));
+        assert_eq!(
+            extract_favicon(html, "https://example.com/page"),
+            Some("https://cdn.example.com/f.png".to_string())
+        );
     }
 
     #[test]
     fn ignores_unrelated_link_tags() {
         let html = r#"<link rel="stylesheet" href="/style.css"><link rel="icon" href="/f.ico">"#;
-        assert_eq!(extract_favicon(html, "https://example.com/"), Some("https://example.com/f.ico".to_string()));
+        assert_eq!(
+            extract_favicon(html, "https://example.com/"),
+            Some("https://example.com/f.ico".to_string())
+        );
     }
 
     #[test]
     fn falls_back_to_default_favicon_when_none_declared() {
-        assert_eq!(default_favicon("https://example.com/page/deep"), Some("https://example.com/favicon.ico".to_string()));
+        assert_eq!(
+            default_favicon("https://example.com/page/deep"),
+            Some("https://example.com/favicon.ico".to_string())
+        );
     }
 }

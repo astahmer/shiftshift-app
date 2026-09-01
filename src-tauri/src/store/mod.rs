@@ -92,7 +92,10 @@ pub fn apply_copy_stats(items: &mut [Item], history: &[HistoryEntry]) {
         let mut count = 0i64;
         let mut first: Option<&str> = None;
         let mut last: Option<&str> = None;
-        for entry in history.iter().filter(|h| h.action == "used" && h.item_id.as_deref() == Some(item.id.as_str())) {
+        for entry in history
+            .iter()
+            .filter(|h| h.action == "used" && h.item_id.as_deref() == Some(item.id.as_str()))
+        {
             count += 1;
             if first.is_none_or(|f| entry.at.as_str() < f) {
                 first = Some(entry.at.as_str());
@@ -140,7 +143,12 @@ pub fn compute_move_rank(items: &[Item], id: &str, direction: MoveDirection) -> 
 /// from `Settings::backend`.
 pub trait Store: Send + Sync {
     fn list_items(&self) -> Result<Vec<Item>, String>;
-    fn add_item(&self, text: &str, kind: ItemKind, source_app: Option<String>) -> Result<Item, String>;
+    fn add_item(
+        &self,
+        text: &str,
+        kind: ItemKind,
+        source_app: Option<String>,
+    ) -> Result<Item, String>;
     fn toggle_done(&self, id: &str) -> Result<(), String>;
     fn toggle_bookmarked(&self, id: &str) -> Result<(), String>;
     fn set_kind(&self, id: &str, kind: ItemKind) -> Result<(), String>;
@@ -156,7 +164,12 @@ pub trait Store: Send + Sync {
     /// for `move_item`, which only exposes "one slot up/down", not "back to
     /// exactly where it was".
     fn set_rank(&self, id: &str, rank: f64) -> Result<(), String>;
-    fn log_event(&self, item_id: Option<&str>, action: &str, detail: Option<&str>) -> Result<(), String>;
+    fn log_event(
+        &self,
+        item_id: Option<&str>,
+        action: &str,
+        detail: Option<&str>,
+    ) -> Result<(), String>;
     fn list_history(&self, limit: u32) -> Result<Vec<HistoryEntry>, String>;
 }
 
@@ -184,15 +197,45 @@ mod tests {
     fn apply_copy_stats_counts_used_events_and_tracks_first_and_last() {
         let mut items = vec![item("a", 1.0), item("b", 2.0)];
         let history = vec![
-            HistoryEntry { id: "1".into(), item_id: Some("a".into()), action: "used".into(), detail: None, at: "2026-01-01T00:00:00Z".into() },
-            HistoryEntry { id: "2".into(), item_id: Some("a".into()), action: "used".into(), detail: None, at: "2026-01-03T00:00:00Z".into() },
-            HistoryEntry { id: "3".into(), item_id: Some("a".into()), action: "used".into(), detail: None, at: "2026-01-02T00:00:00Z".into() },
-            HistoryEntry { id: "4".into(), item_id: Some("b".into()), action: "created".into(), detail: None, at: "2026-01-01T00:00:00Z".into() },
+            HistoryEntry {
+                id: "1".into(),
+                item_id: Some("a".into()),
+                action: "used".into(),
+                detail: None,
+                at: "2026-01-01T00:00:00Z".into(),
+            },
+            HistoryEntry {
+                id: "2".into(),
+                item_id: Some("a".into()),
+                action: "used".into(),
+                detail: None,
+                at: "2026-01-03T00:00:00Z".into(),
+            },
+            HistoryEntry {
+                id: "3".into(),
+                item_id: Some("a".into()),
+                action: "used".into(),
+                detail: None,
+                at: "2026-01-02T00:00:00Z".into(),
+            },
+            HistoryEntry {
+                id: "4".into(),
+                item_id: Some("b".into()),
+                action: "created".into(),
+                detail: None,
+                at: "2026-01-01T00:00:00Z".into(),
+            },
         ];
         apply_copy_stats(&mut items, &history);
         assert_eq!(items[0].copy_count, 3);
-        assert_eq!(items[0].first_copied_at.as_deref(), Some("2026-01-01T00:00:00Z"));
-        assert_eq!(items[0].last_copied_at.as_deref(), Some("2026-01-03T00:00:00Z"));
+        assert_eq!(
+            items[0].first_copied_at.as_deref(),
+            Some("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            items[0].last_copied_at.as_deref(),
+            Some("2026-01-03T00:00:00Z")
+        );
         assert_eq!(items[1].copy_count, 0);
         assert_eq!(items[1].first_copied_at, None);
     }
@@ -229,6 +272,9 @@ mod tests {
     #[test]
     fn unknown_id_is_none() {
         let items = vec![item("a", 1.0)];
-        assert_eq!(compute_move_rank(&items, "missing", MoveDirection::Up), None);
+        assert_eq!(
+            compute_move_rank(&items, "missing", MoveDirection::Up),
+            None
+        );
     }
 }

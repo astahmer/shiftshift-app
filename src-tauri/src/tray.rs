@@ -27,7 +27,11 @@ pub fn apply(app: &AppHandle, show: bool) -> tauri::Result<()> {
         let menu = Menu::with_items(app, &[&show_item, &quit])?;
 
         TrayIconBuilder::with_id(TRAY_ID)
-            .icon(app.default_window_icon().cloned().expect("bundled tray icon"))
+            .icon(
+                app.default_window_icon()
+                    .cloned()
+                    .expect("bundled tray icon"),
+            )
             .menu(&menu)
             .show_menu_on_left_click(false)
             .on_menu_event(|app, event| match event.id.as_ref() {
@@ -36,7 +40,11 @@ pub fn apply(app: &AppHandle, show: bool) -> tauri::Result<()> {
                 _ => {}
             })
             .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    ..
+                } = event
+                {
                     crate::panel::toggle(tray.app_handle());
                 }
             })

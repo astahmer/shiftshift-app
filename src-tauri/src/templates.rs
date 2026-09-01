@@ -38,7 +38,10 @@ mod tests {
     use super::*;
 
     fn tempdir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("shiftshift-templates-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "shiftshift-templates-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -51,7 +54,11 @@ mod tests {
     #[test]
     fn save_then_load_round_trips() {
         let dir = tempdir();
-        let templates = vec![Template { id: "1".into(), name: "standup".into(), body: "did: {{a}}".into() }];
+        let templates = vec![Template {
+            id: "1".into(),
+            name: "standup".into(),
+            body: "did: {{a}}".into(),
+        }];
         save(&dir, &templates).unwrap();
         let loaded = load(&dir);
         assert_eq!(loaded.len(), 1);

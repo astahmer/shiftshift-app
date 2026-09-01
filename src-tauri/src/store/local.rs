@@ -46,11 +46,16 @@ impl LocalSqliteStore {
         };
         conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
         Self::migrate_pinned_to_bookmarked(&conn)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     fn is_readable(conn: &Connection) -> bool {
-        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0)).is_ok()
+        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .is_ok()
     }
 
     /// Opens `path` with SQLCipher's `key` pragma set. That's enough if the
@@ -61,7 +66,8 @@ impl LocalSqliteStore {
     /// triggering a one-time migration instead.
     fn open_encrypted(path: &Path, key: &str) -> Result<Connection, String> {
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
-        conn.execute_batch(&format!("PRAGMA key = '{}';", sql_quote(key))).map_err(|e| e.to_string())?;
+        conn.execute_batch(&format!("PRAGMA key = '{}';", sql_quote(key)))
+            .map_err(|e| e.to_string())?;
         if Self::is_readable(&conn) {
             return Ok(conn);
         }
@@ -80,7 +86,8 @@ impl LocalSqliteStore {
         drop(conn);
         let key = crate::db_encryption::get_or_create_key()?;
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
-        conn.execute_batch(&format!("PRAGMA key = '{}';", sql_quote(&key))).map_err(|e| e.to_string())?;
+        conn.execute_batch(&format!("PRAGMA key = '{}';", sql_quote(&key)))
+            .map_err(|e| e.to_string())?;
         if Self::is_readable(&conn) {
             eprintln!("shiftshift: local database is still encrypted even though encryption is off in settings; using the stored key so it stays readable");
             Ok(conn)
@@ -105,8 +112,12 @@ impl LocalSqliteStore {
                 sql_quote(key)
             ))
             .map_err(|e| e.to_string())?;
-        plain_conn.query_row("SELECT sqlcipher_export('encrypted')", [], |_| Ok(())).map_err(|e| e.to_string())?;
-        plain_conn.execute_batch("DETACH DATABASE encrypted;").map_err(|e| e.to_string())?;
+        plain_conn
+            .query_row("SELECT sqlcipher_export('encrypted')", [], |_| Ok(()))
+            .map_err(|e| e.to_string())?;
+        plain_conn
+            .execute_batch("DETACH DATABASE encrypted;")
+            .map_err(|e| e.to_string())?;
         drop(plain_conn);
 
         let backup_path = path.with_extension("sqlite3.plaintext-backup");
@@ -118,7 +129,8 @@ impl LocalSqliteStore {
         );
 
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
-        conn.execute_batch(&format!("PRAGMA key = '{}';", sql_quote(key))).map_err(|e| e.to_string())?;
+        conn.execute_batch(&format!("PRAGMA key = '{}';", sql_quote(key)))
+            .map_err(|e| e.to_string())?;
         Ok(conn)
     }
 
@@ -198,7 +210,12 @@ impl Store for LocalSqliteStore {
         Ok(items)
     }
 
-    fn add_item(&self, text: &str, kind: ItemKind, source_app: Option<String>) -> Result<Item, String> {
+    fn add_item(
+        &self,
+        text: &str,
+        kind: ItemKind,
+        source_app: Option<String>,
+    ) -> Result<Item, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         // Derived from the current max rather than a wall-clock timestamp:
         // items inserted within the same millisecond (a fast test, several
@@ -206,7 +223,9 @@ impl Store for LocalSqliteStore {
         // otherwise tie, making sort order and move_item's neighbor-midpoint
         // math silently no-op against equal ranks.
         let max_rank: f64 = conn
-            .query_row("SELECT COALESCE(MAX(rank), 0) FROM items", [], |row| row.get(0))
+            .query_row("SELECT COALESCE(MAX(rank), 0) FROM items", [], |row| {
+                row.get(0)
+            })
             .map_err(|e| e.to_string())?;
         let item = Item {
             id: uuid::Uuid::new_v4().to_string(),
@@ -239,29 +258,41 @@ impl Store for LocalSqliteStore {
 
     fn toggle_done(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute("UPDATE items SET done = NOT done WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE items SET done = NOT done WHERE id = ?1",
+            params![id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     fn toggle_bookmarked(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute("UPDATE items SET bookmarked = NOT bookmarked WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE items SET bookmarked = NOT bookmarked WHERE id = ?1",
+            params![id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     fn set_kind(&self, id: &str, kind: ItemKind) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute("UPDATE items SET kind = ?1 WHERE id = ?2", params![kind_str(kind), id])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE items SET kind = ?1 WHERE id = ?2",
+            params![kind_str(kind), id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     fn update_text(&self, id: &str, text: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute("UPDATE items SET text = ?1 WHERE id = ?2", params![text, id])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE items SET text = ?1 WHERE id = ?2",
+            params![text, id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -285,8 +316,11 @@ impl Store for LocalSqliteStore {
             return Ok(()); // already at that edge, or id not found
         };
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute("UPDATE items SET rank = ?1 WHERE id = ?2", params![new_rank, id])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE items SET rank = ?1 WHERE id = ?2",
+            params![new_rank, id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -312,15 +346,30 @@ impl Store for LocalSqliteStore {
 
     fn set_rank(&self, id: &str, rank: f64) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.execute("UPDATE items SET rank = ?1 WHERE id = ?2", params![rank, id]).map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE items SET rank = ?1 WHERE id = ?2",
+            params![rank, id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    fn log_event(&self, item_id: Option<&str>, action: &str, detail: Option<&str>) -> Result<(), String> {
+    fn log_event(
+        &self,
+        item_id: Option<&str>,
+        action: &str,
+        detail: Option<&str>,
+    ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
             "INSERT INTO history (id, item_id, action, detail, at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![uuid::Uuid::new_v4().to_string(), item_id, action, detail, chrono::Utc::now().to_rfc3339()],
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                item_id,
+                action,
+                detail,
+                chrono::Utc::now().to_rfc3339()
+            ],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -416,7 +465,11 @@ mod tests {
         )
         .unwrap();
         LocalSqliteStore::migrate_pinned_to_bookmarked(&conn).unwrap();
-        let bookmarked: i64 = conn.query_row("SELECT bookmarked FROM items WHERE id = 'id-1'", [], |r| r.get(0)).unwrap();
+        let bookmarked: i64 = conn
+            .query_row("SELECT bookmarked FROM items WHERE id = 'id-1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(bookmarked, 1);
     }
 
@@ -501,7 +554,8 @@ mod tests {
     fn log_event_and_list_history_round_trip_newest_first() {
         let s = store();
         let item = s.add_item("thing", ItemKind::Note, None).unwrap();
-        s.log_event(Some(&item.id), "created", Some("thing")).unwrap();
+        s.log_event(Some(&item.id), "created", Some("thing"))
+            .unwrap();
         s.log_event(Some(&item.id), "bookmarked", None).unwrap();
         let history = s.list_history(10).unwrap();
         assert_eq!(history.len(), 2);
@@ -519,11 +573,31 @@ mod tests {
         assert_eq!(s.list_history(2).unwrap().len(), 2);
     }
 
+    #[test]
+    fn lists_ten_thousand_local_items() {
+        let s = store();
+        for i in 0..10_000 {
+            s.add_item(&format!("bench-{i}"), ItemKind::Note, None)
+                .unwrap();
+        }
+        let started = std::time::Instant::now();
+        let items = s.list_items().unwrap();
+        assert_eq!(items.len(), 10_000);
+        assert!(
+            started.elapsed().as_millis() < 2_000,
+            "list_items took {:?}",
+            started.elapsed()
+        );
+    }
+
     // --- Encryption (SQLCipher) — real files, since this is about at-rest
     // persistence; `:memory:` databases have nothing on disk to encrypt.
 
     fn temp_db_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("shiftshift-encryption-test-{name}-{}.sqlite3", uuid::Uuid::new_v4()))
+        std::env::temp_dir().join(format!(
+            "shiftshift-encryption-test-{name}-{}.sqlite3",
+            uuid::Uuid::new_v4()
+        ))
     }
 
     #[test]
@@ -557,7 +631,9 @@ mod tests {
         let path = temp_db_path("migrate");
         {
             let plain = LocalSqliteStore::open(&path).unwrap();
-            plain.add_item("pre-existing note", ItemKind::Note, None).unwrap();
+            plain
+                .add_item("pre-existing note", ItemKind::Note, None)
+                .unwrap();
         }
         let key = "new-key-bbbb";
         let encrypted = LocalSqliteStore::open_with_key(&path, Some(key)).unwrap();
@@ -566,7 +642,10 @@ mod tests {
         assert_eq!(items[0].text, "pre-existing note");
 
         let backup_path = path.with_extension("sqlite3.plaintext-backup");
-        assert!(backup_path.exists(), "plaintext backup should be kept, not deleted");
+        assert!(
+            backup_path.exists(),
+            "plaintext backup should be kept, not deleted"
+        );
 
         // The migrated file really is encrypted now, not just readable by
         // coincidence — the wrong key must fail against it. (Not testing

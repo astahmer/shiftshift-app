@@ -27,13 +27,18 @@ fn main() {
 
     match TcpStream::connect(("127.0.0.1", PORT)) {
         Ok(mut stream) => {
-            if let Err(e) = stream.write_all(text.as_bytes()).and_then(|()| stream.write_all(b"\n")) {
+            if let Err(e) = stream
+                .write_all(text.as_bytes())
+                .and_then(|()| stream.write_all(b"\n"))
+            {
                 eprintln!("shift: failed to send capture: {e}");
                 std::process::exit(1);
             }
         }
         Err(_) => {
-            eprintln!("shift: could not reach shiftshift on 127.0.0.1:{PORT} — is the app running?");
+            eprintln!(
+                "shift: could not reach shiftshift on 127.0.0.1:{PORT} — is the app running?"
+            );
             std::process::exit(1);
         }
     }

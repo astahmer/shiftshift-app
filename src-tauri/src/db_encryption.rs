@@ -34,7 +34,14 @@ pub fn get_or_create_key() -> Result<String, String> {
 
 fn read_keychain_key() -> Result<Option<String>, String> {
     let output = Command::new("security")
-        .args(["find-generic-password", "-a", &keychain_account(), "-s", KEYCHAIN_SERVICE, "-w"])
+        .args([
+            "find-generic-password",
+            "-a",
+            &keychain_account(),
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-w",
+        ])
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
@@ -46,7 +53,16 @@ fn read_keychain_key() -> Result<Option<String>, String> {
 
 fn store_keychain_key(key: &str) -> Result<(), String> {
     let output = Command::new("security")
-        .args(["add-generic-password", "-a", &keychain_account(), "-s", KEYCHAIN_SERVICE, "-w", key, "-U"])
+        .args([
+            "add-generic-password",
+            "-a",
+            &keychain_account(),
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-w",
+            key,
+            "-U",
+        ])
         .output()
         .map_err(|e| e.to_string())?;
     if output.status.success() {
@@ -61,7 +77,8 @@ fn store_keychain_key(key: &str) -> Result<(), String> {
 fn generate_key() -> String {
     let mut file = std::fs::File::open("/dev/urandom").expect("/dev/urandom should exist on macOS");
     let mut bytes = [0u8; 32];
-    file.read_exact(&mut bytes).expect("reading 32 bytes from /dev/urandom should not fail");
+    file.read_exact(&mut bytes)
+        .expect("reading 32 bytes from /dev/urandom should not fail");
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

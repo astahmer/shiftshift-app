@@ -14,7 +14,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{apply_copy_stats, compute_move_rank, HistoryEntry, Item, ItemKind, MoveDirection, Store};
+use super::{
+    apply_copy_stats, compute_move_rank, HistoryEntry, Item, ItemKind, MoveDirection, Store,
+};
 
 pub struct FolderStore {
     items_dir: PathBuf,
@@ -44,7 +46,10 @@ impl FolderStore {
         let history_dir = root.join("history");
         fs::create_dir_all(&items_dir).map_err(|e| e.to_string())?;
         fs::create_dir_all(&history_dir).map_err(|e| e.to_string())?;
-        Ok(Self { items_dir, history_dir })
+        Ok(Self {
+            items_dir,
+            history_dir,
+        })
     }
 
     fn item_path(&self, id: &str) -> PathBuf {
@@ -96,15 +101,27 @@ impl Store for FolderStore {
     fn list_items(&self) -> Result<Vec<Item>, String> {
         let mut items = self.read_all_items()?;
         items.sort_by(|a, b| {
-            b.bookmarked.cmp(&a.bookmarked).then(b.rank.total_cmp(&a.rank)).then(b.created_at.cmp(&a.created_at))
+            b.bookmarked
+                .cmp(&a.bookmarked)
+                .then(b.rank.total_cmp(&a.rank))
+                .then(b.created_at.cmp(&a.created_at))
         });
         let history = self.read_all_history()?;
         apply_copy_stats(&mut items, &history);
         Ok(items)
     }
 
-    fn add_item(&self, text: &str, kind: ItemKind, source_app: Option<String>) -> Result<Item, String> {
-        let max_rank = self.read_all_items()?.iter().map(|i| i.rank).fold(0.0, f64::max);
+    fn add_item(
+        &self,
+        text: &str,
+        kind: ItemKind,
+        source_app: Option<String>,
+    ) -> Result<Item, String> {
+        let max_rank = self
+            .read_all_items()?
+            .iter()
+            .map(|i| i.rank)
+            .fold(0.0, f64::max);
         let item = Item {
             id: uuid::Uuid::new_v4().to_string(),
             kind,
@@ -177,7 +194,12 @@ impl Store for FolderStore {
         self.write_item(&item)
     }
 
-    fn log_event(&self, item_id: Option<&str>, action: &str, detail: Option<&str>) -> Result<(), String> {
+    fn log_event(
+        &self,
+        item_id: Option<&str>,
+        action: &str,
+        detail: Option<&str>,
+    ) -> Result<(), String> {
         let entry = HistoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             item_id: item_id.map(|s| s.to_string()),
@@ -202,7 +224,8 @@ mod tests {
     use super::*;
 
     fn store() -> FolderStore {
-        let dir = std::env::temp_dir().join(format!("shiftshift-folder-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("shiftshift-folder-test-{}", uuid::Uuid::new_v4()));
         FolderStore::open(dir.to_str().unwrap()).unwrap()
     }
 
@@ -215,7 +238,10 @@ mod tests {
     #[test]
     fn expands_a_leading_tilde_using_home() {
         let home = std::env::var("HOME").unwrap();
-        assert_eq!(expand_tilde("~/Documents/shiftshift"), format!("{home}/Documents/shiftshift"));
+        assert_eq!(
+            expand_tilde("~/Documents/shiftshift"),
+            format!("{home}/Documents/shiftshift")
+        );
     }
 
     #[test]
@@ -265,7 +291,8 @@ mod tests {
     fn log_event_and_list_history_round_trip_newest_first() {
         let s = store();
         let item = s.add_item("thing", ItemKind::Note, None).unwrap();
-        s.log_event(Some(&item.id), "created", Some("thing")).unwrap();
+        s.log_event(Some(&item.id), "created", Some("thing"))
+            .unwrap();
         s.log_event(Some(&item.id), "used", None).unwrap();
         let history = s.list_history(10).unwrap();
         assert_eq!(history.len(), 2);

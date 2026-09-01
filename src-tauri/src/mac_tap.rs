@@ -22,8 +22,8 @@ use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPortRef;
 use core_foundation::runloop::{kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop};
 use core_graphics::event::{
-    CallbackResult, CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
-    CGEventTapProxy, CGEventType,
+    CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CGEventTapProxy, CGEventType, CallbackResult,
 };
 use tauri::{AppHandle, Manager};
 
@@ -110,7 +110,9 @@ fn on_flags_changed(state: &RefCell<State>, flags: u64, now: Instant, bindings: 
             continue;
         }
         let tapped = match s.pressed {
-            Some((p, at)) => p == side && !s.dirty && now.saturating_duration_since(at) < HOLD_LIMIT,
+            Some((p, at)) => {
+                p == side && !s.dirty && now.saturating_duration_since(at) < HOLD_LIMIT
+            }
             None => false,
         };
         s.pressed = None;
@@ -124,7 +126,11 @@ fn on_flags_changed(state: &RefCell<State>, flags: u64, now: Instant, bindings: 
             if prev_side == side && now.saturating_duration_since(prev_at) < TAP_WINDOW {
                 s.last_double = None;
                 s.last_tap = None;
-                fired = if prev_action == Action::Capture { Fired::PromoteToTodo(prev_at) } else { Fired::Nothing };
+                fired = if prev_action == Action::Capture {
+                    Fired::PromoteToTodo(prev_at)
+                } else {
+                    Fired::Nothing
+                };
                 continue;
             }
         }
@@ -147,7 +153,13 @@ fn on_flags_changed(state: &RefCell<State>, flags: u64, now: Instant, bindings: 
 }
 
 fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
-    let state = RefCell::new(State { prev_flags: 0, pressed: None, dirty: false, last_tap: None, last_double: None });
+    let state = RefCell::new(State {
+        prev_flags: 0,
+        pressed: None,
+        dirty: false,
+        last_tap: None,
+        last_double: None,
+    });
     let port: Arc<AtomicPtr<c_void>> = Arc::new(AtomicPtr::new(ptr::null_mut()));
     let port_cb = Arc::clone(&port);
     let app_cb = app.clone();
@@ -172,7 +184,12 @@ fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
                 }
                 CGEventType::FlagsChanged => {
                     let bindings = app_cb.state::<SettingsState>().0.lock().unwrap().bindings;
-                    match on_flags_changed(&state, event.get_flags().bits(), Instant::now(), bindings) {
+                    match on_flags_changed(
+                        &state,
+                        event.get_flags().bits(),
+                        Instant::now(),
+                        bindings,
+                    ) {
                         Fired::Action(Action::Capture) => capture::capture_selection(&app_cb),
                         Fired::Action(Action::TogglePanel) => panel::toggle(&app_cb),
                         Fired::Action(Action::None) | Fired::Nothing => {}
@@ -190,7 +207,10 @@ fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
 
     let port_ref = tap.mach_port().as_concrete_TypeRef();
     port.store(port_ref as *mut c_void, Ordering::Relaxed);
-    let source = tap.mach_port().create_runloop_source(0).map_err(|()| "could not attach the tap to a run loop")?;
+    let source = tap
+        .mach_port()
+        .create_runloop_source(0)
+        .map_err(|()| "could not attach the tap to a run loop")?;
     CFRunLoop::get_current().add_source(&source, unsafe { kCFRunLoopCommonModes });
     tap.enable();
 
@@ -221,7 +241,9 @@ pub fn start(app: AppHandle) {
             if let Err(reason) = run_tap(&app) {
                 if reported != Some(reason) {
                     reported = Some(reason);
-                    eprintln!("shiftshift: double-shift inactive — {reason}; fallback hotkeys still work");
+                    eprintln!(
+                        "shiftshift: double-shift inactive — {reason}; fallback hotkeys still work"
+                    );
                 }
             }
             std::thread::sleep(RETRY_DELAY);
@@ -237,7 +259,13 @@ mod tests {
     const R: u64 = NX_DEVICERSHIFTKEYMASK;
 
     fn state() -> RefCell<State> {
-        RefCell::new(State { prev_flags: 0, pressed: None, dirty: false, last_tap: None, last_double: None })
+        RefCell::new(State {
+            prev_flags: 0,
+            pressed: None,
+            dirty: false,
+            last_tap: None,
+            last_double: None,
+        })
     }
 
     fn ms(n: u64) -> Duration {
@@ -315,7 +343,11 @@ mod tests {
         let (st, t0) = (state(), Instant::now());
         // Left is bound to Capture by default: tap, tap (fires Capture), tap
         // (promotes) — each release within TAP_WINDOW of the previous.
-        let a = feed(&st, t0, &[(L, 0), (0, 50), (L, 100), (0, 150), (L, 200), (0, 250)]);
+        let a = feed(
+            &st,
+            t0,
+            &[(L, 0), (0, 50), (L, 100), (0, 150), (L, 200), (0, 250)],
+        );
         assert_eq!(a, Fired::PromoteToTodo(t0 + ms(150)));
     }
 
@@ -323,7 +355,11 @@ mod tests {
     fn triple_tap_on_the_toggle_panel_side_does_nothing_extra() {
         let (st, t0) = (state(), Instant::now());
         // Right is bound to TogglePanel by default — nothing to promote.
-        let a = feed(&st, t0, &[(R, 0), (0, 50), (R, 100), (0, 150), (R, 200), (0, 250)]);
+        let a = feed(
+            &st,
+            t0,
+            &[(R, 0), (0, 50), (R, 100), (0, 150), (R, 200), (0, 250)],
+        );
         assert_eq!(a, Fired::Nothing);
     }
 
@@ -335,7 +371,16 @@ mod tests {
         let a = feed(
             &st,
             t0,
-            &[(L, 0), (0, 50), (L, 100), (0, 150), (L, 200), (0, 250), (L, 300), (0, 350)],
+            &[
+                (L, 0),
+                (0, 50),
+                (L, 100),
+                (0, 150),
+                (L, 200),
+                (0, 250),
+                (L, 300),
+                (0, 350),
+            ],
         );
         assert_eq!(a, Fired::Nothing);
     }
@@ -344,7 +389,11 @@ mod tests {
     fn a_third_tap_outside_the_window_does_not_promote() {
         let (st, t0) = (state(), Instant::now());
         // Third release lands 450ms after the double fired, past TAP_WINDOW.
-        let a = feed(&st, t0, &[(L, 0), (0, 50), (L, 100), (0, 150), (L, 550), (0, 600)]);
+        let a = feed(
+            &st,
+            t0,
+            &[(L, 0), (0, 50), (L, 100), (0, 150), (L, 550), (0, 600)],
+        );
         assert_eq!(a, Fired::Nothing);
     }
 }

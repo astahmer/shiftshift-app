@@ -11,10 +11,14 @@ pub fn to_markdown(items: &[Item]) -> String {
     let images: Vec<&Item> = items.iter().filter(|i| i.kind == ItemKind::Image).collect();
 
     let mut out = String::from("# shiftshift export\n\n");
-    append_section(&mut out, "Todos", &todos, |item| format!("- [{}] {}", if item.done { "x" } else { " " }, item.text));
+    append_section(&mut out, "Todos", &todos, |item| {
+        format!("- [{}] {}", if item.done { "x" } else { " " }, item.text)
+    });
     append_section(&mut out, "Notes", &notes, |item| format!("- {}", item.text));
     append_section(&mut out, "Links", &links, |item| format!("- {}", item.text));
-    append_section(&mut out, "Images", &images, |item| format!("![]({})", item.text));
+    append_section(&mut out, "Images", &images, |item| {
+        format!("![]({})", item.text)
+    });
     out
 }
 

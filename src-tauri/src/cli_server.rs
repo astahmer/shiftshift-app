@@ -25,7 +25,8 @@ pub fn start(app: AppHandle) {
             std::thread::spawn(move || {
                 for line in BufReader::new(stream).lines().map_while(Result::ok) {
                     if let Some(text) = normalize_line(&line) {
-                        let source = crate::capture::frontmost_app_name().unwrap_or_else(|| "CLI".to_string());
+                        let source = crate::capture::frontmost_app_name()
+                            .unwrap_or_else(|| "CLI".to_string());
                         let _ = crate::capture::handle_captured_text(&app, &text, Some(source));
                     }
                 }

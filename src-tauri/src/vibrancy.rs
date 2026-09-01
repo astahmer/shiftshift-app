@@ -15,7 +15,12 @@ pub fn apply(window: &WebviewWindow) {
 #[cfg(target_os = "macos")]
 fn set_effect(window: &WebviewWindow) {
     use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
-    if let Err(e) = apply_vibrancy(window, NSVisualEffectMaterial::HudWindow, Some(NSVisualEffectState::Active), Some(12.0)) {
+    if let Err(e) = apply_vibrancy(
+        window,
+        NSVisualEffectMaterial::HudWindow,
+        Some(NSVisualEffectState::Active),
+        Some(12.0),
+    ) {
         eprintln!("shiftshift: vibrancy unavailable: {e}");
     }
 }
