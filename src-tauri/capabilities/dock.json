@@ -1,0 +1,7 @@
+{
+	"$schema": "../gen/schemas/desktop-schema.json",
+	"identifier": "dock",
+	"description": "Capabilities for the small always-visible recent-items dock (Settings -> Dock)",
+	"windows": ["dock"],
+	"permissions": ["core:default", "core:window:allow-start-dragging", "shell:allow-open"]
+}
