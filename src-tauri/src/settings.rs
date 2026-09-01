@@ -15,7 +15,88 @@ const FILE_NAME: &str = "settings.json";
 pub const DEFAULT_FALLBACK_TOGGLE: &str = "CmdOrCtrl+Shift+Space";
 pub const DEFAULT_FALLBACK_CAPTURE: &str = "CmdOrCtrl+Shift+C";
 pub const DEFAULT_FALLBACK_IMAGE: &str = "CmdOrCtrl+Shift+I";
+pub const DEFAULT_SOUND_NAME: &str = "Glass";
 
+/// What happens when something is captured — see `notify.rs`. `Custom` is
+/// an in-app toast (the panel briefly appears unfocused with a checkmark
+/// animation) rather than going through the OS notification center at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationStyle {
+    #[default]
+    None,
+    Native,
+    Custom,
+}
+
+/// What text a notification shows — applies to both `Native` and `Custom`
+/// styles (see `notify.rs::notify_captured`). Native can't actually go
+/// text-free (`display notification` requires a body), so `IconOnly` there
+/// degrades to just the kind label ("Note saved") instead of the excerpt.
+// The shared "Icon" prefix is deliberate, not accidental repetition —
+// every variant includes the icon, that's the axis being named.
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotifyContent {
+    IconOnly,
+    IconTitle,
+    #[default]
+    IconTitleExcerpt,
+    IconExcerpt,
+}
+
+/// Where the "custom" toast (`NotificationStyle::Custom`) window sits on
+/// screen — a 3x3 grid of corner/edge/center presets for the toast, extra
+/// perimeter anchors for the dock (5 slots per edge), plus `Custom` for a
+/// user-dragged exact position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToastPosition {
+    TopLeft,
+    TopCenter,
+    #[default]
+    TopRight,
+    MiddleLeft,
+    /// Extra dock-only perimeter anchors (5 slots per edge). The toast
+    /// 3×3 picker never offers these; `toast::place` still maps them so a
+    /// leftover saved value can't fail to compile.
+    LeftTop,
+    LeftUpper,
+    LeftLower,
+    LeftBottom,
+    RightTop,
+    RightUpper,
+    RightLower,
+    RightBottom,
+    TopMidLeft,
+    TopMidRight,
+    BottomMidLeft,
+    BottomMidRight,
+    Center,
+    MiddleRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+    Custom,
+}
+
+/// What Enter (or a pinned-slot shortcut) does on a highlighted item.
+/// Default is the Raycast-like "copy, hide, paste into wherever you were".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HighlightSubmit {
+    Copy,
+    CopyHide,
+    #[default]
+    CopyHideWrite,
+}
+
+/// `secret_access_key` is write-only over the wire — see `commands::set_settings`,
+/// which moves a non-empty value into the OS keychain and always persists ""
+/// to `settings.json` instead, and `s3_secret_access_key`/`clear_s3_secret`
+/// below. `access_key_id` stays plain (an identifier, not a secret on its
+/// own — same treatment AWS's own CLI gives it).
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct S3Settings {
     pub endpoint: String,
@@ -33,8 +114,46 @@ pub struct Settings {
     /// Opaque to Rust — the frontend owns the theme registry and CSS variable
     /// blocks (see `src/themes.ts`); this is just persisted verbatim.
     pub theme: String,
-    pub notify_on_save: bool,
+    pub notification_style: NotificationStyle,
     pub notify_sound: bool,
+    /// One of the file stems under /System/Library/Sounds — see notify.rs's
+    /// `play_sound` for how an unrecognized name is handled (skipped, not
+    /// an error, since this is user-typed-adjacent via a <select> but kept
+    /// as a plain string rather than an enum for forward-compatibility).
+    pub notify_sound_name: String,
+    /// 0-100, passed to `afplay -v` as a 0.0-1.0 fraction — independent of
+    /// the system's own notification-sound volume, which `display
+    /// notification`'s own `sound name` clause has no control over.
+    pub notify_sound_volume: u8,
+    /// Applies to both `Native` and `Custom` styles — see `NotifyContent`.
+    pub notify_content: NotifyContent,
+    /// Only meaningful for `NotificationStyle::Custom` — see `toast.rs`.
+    pub toast_position: ToastPosition,
+    /// Physical screen coordinates of the toast window's top-left corner —
+    /// only meaningful when `toast_position == ToastPosition::Custom`
+    /// (dragged into place, see `toast.rs`'s `finish_arrange`).
+    pub toast_custom_x: i32,
+    pub toast_custom_y: i32,
+    /// Milliseconds the toast stays up before auto-hiding — `Custom` style
+    /// only, native banners' visible duration is OS-controlled.
+    pub toast_duration_ms: u32,
+    /// Percent scale (e.g. 100 = normal) applied to the toast's text/icon —
+    /// `Custom` style only, same reasoning as `toast_duration_ms`.
+    pub toast_font_scale: u8,
+    /// Off by default — a small always-visible pill (see `dock.rs`) showing
+    /// the most recent captures, click to expand/collapse. Same 3x3-grid
+    /// positioning concept as the toast, hence sharing `ToastPosition`.
+    pub dock_enabled: bool,
+    pub dock_position: ToastPosition,
+    pub dock_custom_x: i32,
+    pub dock_custom_y: i32,
+    /// How many recent items the expanded dock shows.
+    pub dock_item_count: u8,
+    /// Logical pixel height of one expanded row. `0` means the compiled default.
+    pub dock_row_height: u8,
+    /// Expanded notch size in logical pixels. `0` means the compiled default.
+    pub dock_expanded_width: u32,
+    pub dock_expanded_height: u32,
     /// Tauri accelerator strings (e.g. "CmdOrCtrl+Shift+Space") for the
     /// fallback global shortcuts, used where the raw double-shift hook is
     /// unavailable or denied. Empty string means "disabled, don't register".
@@ -46,8 +165,13 @@ pub struct Settings {
     /// clipboard image before it could be read.
     pub fallback_image: String,
     pub capture_mode: CaptureMode,
+    /// Enter on a highlighted row — see `HighlightSubmit`.
+    pub highlight_submit: HighlightSubmit,
     /// Hide the panel when it loses focus (e.g. the user clicks elsewhere).
     pub hide_on_blur: bool,
+    /// macOS inline autocorrect / spellcheck on the capture input. Off by
+    /// default — a capture box should not rewrite "bonjour" while you type.
+    pub input_spellcheck: bool,
     /// Auto-capture everything copied to the system clipboard, own writes
     /// excluded (shiftshift's clipboard-watch).
     pub clipboard_watch: bool,
@@ -89,6 +213,14 @@ pub struct Settings {
     /// on. Only affects the local backend; S3/folder backends store plain
     /// JSON regardless (out of scope for this pass).
     pub encrypt_local_storage: bool,
+    /// Remembered panel size/position. `panel_width == 0` means "use the
+    /// compiled default"; `panel_placed` is false until the user has
+    /// resized or dragged the window at least once.
+    pub panel_width: u32,
+    pub panel_height: u32,
+    pub panel_x: i32,
+    pub panel_y: i32,
+    pub panel_placed: bool,
     /// Item ids pinned to ⌘1-⌘9 for instant copy-and-close, Raycast-
     /// favorites-style — index 0 is slot 1, etc. Always exactly 9 entries;
     /// an empty string means that slot is unassigned. Kept as item ids
@@ -97,21 +229,48 @@ pub struct Settings {
     pub pinned_items: Vec<String>,
 }
 
-pub const DEFAULT_EXCLUDED_APPS: &[&str] =
-    &["1Password", "Bitwarden", "Dashlane", "LastPass", "Keychain Access", "KeePassXC", "Enpass", "NordPass", "RoboForm"];
+pub const DEFAULT_EXCLUDED_APPS: &[&str] = &[
+    "1Password",
+    "Bitwarden",
+    "Dashlane",
+    "LastPass",
+    "Keychain Access",
+    "KeePassXC",
+    "Enpass",
+    "NordPass",
+    "RoboForm",
+];
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             bindings: Bindings::default(),
             theme: "tokyo-night".to_string(),
-            notify_on_save: false,
+            notification_style: NotificationStyle::default(),
             notify_sound: true,
+            notify_sound_name: DEFAULT_SOUND_NAME.to_string(),
+            notify_sound_volume: 50,
+            notify_content: NotifyContent::default(),
+            toast_position: ToastPosition::default(),
+            toast_custom_x: 0,
+            toast_custom_y: 0,
+            toast_duration_ms: 1800,
+            toast_font_scale: 100,
+            dock_enabled: false,
+            dock_position: ToastPosition::TopCenter,
+            dock_custom_x: 0,
+            dock_custom_y: 0,
+            dock_item_count: 10,
+            dock_row_height: 36,
+            dock_expanded_width: 0,
+            dock_expanded_height: 0,
             fallback_toggle: DEFAULT_FALLBACK_TOGGLE.to_string(),
             fallback_capture: DEFAULT_FALLBACK_CAPTURE.to_string(),
             fallback_image: DEFAULT_FALLBACK_IMAGE.to_string(),
             capture_mode: CaptureMode::default(),
+            highlight_submit: HighlightSubmit::default(),
             hide_on_blur: true,
+            input_spellcheck: false,
             clipboard_watch: false,
             launch_at_login: false,
             backend: "local".to_string(),
@@ -121,9 +280,17 @@ impl Default for Settings {
             show_tray_icon: false,
             folder_path: String::new(),
             panel_opacity: 0,
-            excluded_apps: DEFAULT_EXCLUDED_APPS.iter().map(|s| s.to_string()).collect(),
+            excluded_apps: DEFAULT_EXCLUDED_APPS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             encrypt_local_storage: false,
             pinned_items: vec![String::new(); 9],
+            panel_width: 0,
+            panel_height: 0,
+            panel_x: 0,
+            panel_y: 0,
+            panel_placed: false,
         }
     }
 }
@@ -145,20 +312,91 @@ pub fn load(app_data_dir: &Path) -> Settings {
     // left/right keys silently ignored as unknown fields — so the shape is
     // checked explicitly rather than just trying Settings first.
     if value.get("bindings").is_some() {
-        return serde_json::from_value(value).unwrap_or_default();
+        let mut settings = serde_json::from_value(value).unwrap_or_default();
+        migrate_legacy_dock_box(&mut settings);
+        return settings;
     }
     // Legacy settings.json from before Settings grew beyond just bindings —
     // the whole file used to *be* a bare Bindings object.
     if let Ok(bindings) = serde_json::from_value::<Bindings>(value) {
-        return Settings { bindings, ..Settings::default() };
+        return Settings {
+            bindings,
+            ..Settings::default()
+        };
     }
     Settings::default()
 }
 
+/// The first notch build stored a 280×220 list-box as the expanded default.
+/// That size is a floating card, not Tokitoki's 84px rail — treat it as unset
+/// so expand hugs the edge instead of hanging off-screen.
+fn migrate_legacy_dock_box(settings: &mut Settings) {
+    if settings.dock_expanded_width > 0 && settings.dock_expanded_width < 160 {
+        settings.dock_expanded_width = 0;
+        settings.dock_expanded_height = 0;
+    }
+    if settings.dock_expanded_width == 280 && settings.dock_expanded_height == 220 {
+        settings.dock_expanded_width = 0;
+        settings.dock_expanded_height = 0;
+    }
+    if settings.dock_expanded_width == 280 && settings.dock_expanded_height == 408 {
+        settings.dock_expanded_width = 0;
+        settings.dock_expanded_height = 0;
+    }
+    if settings.dock_expanded_width == 0
+        && settings.dock_expanded_height == 0
+        && settings.dock_item_count == 5
+    {
+        settings.dock_item_count = 10;
+    }
+}
+
+/// Always writes `s3.secret_access_key` as `""` regardless of what's in
+/// `settings` — the real value lives in the OS keychain (see
+/// `s3_secret_access_key`/`set_s3_secret_access_key` below), never on disk.
+/// Defense in depth: `commands::set_settings` already scrubs it before this
+/// is ever called, but a settings.json that's safe to `cat` no matter what
+/// bypasses that is worth the one clone.
 pub fn save(app_data_dir: &Path, settings: &Settings) -> Result<(), String> {
     std::fs::create_dir_all(app_data_dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    let mut settings = settings.clone();
+    settings.s3.secret_access_key.clear();
+    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     std::fs::write(app_data_dir.join(FILE_NAME), json).map_err(|e| e.to_string())
+}
+
+const KEYCHAIN_SERVICE: &str = "dev.shiftshift.tauri";
+const KEYCHAIN_S3_SECRET_ACCOUNT: &str = "s3-secret-access-key";
+
+/// Reads the S3 secret access key from the OS keychain — `None` if never
+/// set. This is the only place that ever reads the *real* secret; `Settings`
+/// itself never carries it (see `S3Settings`'s doc comment).
+pub fn s3_secret_access_key() -> Option<String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_S3_SECRET_ACCOUNT)
+        .ok()?
+        .get_password()
+        .ok()
+}
+
+/// Called from `commands::set_settings` when the incoming (write-only)
+/// `s3.secret_access_key` is non-empty — an empty value there means
+/// "untouched" (see `S3Settings`'s doc comment), not "clear it"; use
+/// `clear_s3_secret_access_key` for that.
+pub fn set_s3_secret_access_key(secret: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_S3_SECRET_ACCOUNT)
+        .map_err(|e| e.to_string())?;
+    entry.set_password(secret).map_err(|e| e.to_string())
+}
+
+/// Settings -> Sync -> the secret field's "Clear" button — explicit removal,
+/// since a blank field on save no longer means that (see above).
+pub fn clear_s3_secret_access_key() -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_S3_SECRET_ACCOUNT)
+        .map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -171,21 +409,126 @@ mod tests {
         let settings = load(&tempdir());
         assert_eq!(settings.bindings.left, Action::Capture);
         assert_eq!(settings.theme, "tokyo-night");
-        assert!(!settings.notify_on_save);
+        assert_eq!(settings.notification_style, NotificationStyle::None);
+        assert_eq!(settings.notify_sound_name, "Glass");
+        assert_eq!(settings.notify_sound_volume, 50);
+        assert_eq!(settings.toast_position, ToastPosition::TopRight);
+        assert!(!settings.dock_enabled);
+        assert_eq!(settings.dock_position, ToastPosition::TopCenter);
+        assert_eq!(settings.dock_item_count, 10);
+        assert_eq!(settings.dock_row_height, 36);
+        assert_eq!(settings.highlight_submit, HighlightSubmit::CopyHideWrite);
+        assert!(!settings.input_spellcheck);
+    }
+
+    #[test]
+    fn old_expanded_box_size_becomes_auto_rail() {
+        let dir = tempdir();
+        let mut settings = Settings::default();
+        settings.dock_expanded_width = 280;
+        settings.dock_expanded_height = 220;
+        save(&dir, &settings).unwrap();
+        let loaded = load(&dir);
+        assert_eq!(loaded.dock_expanded_width, 0);
+        assert_eq!(loaded.dock_expanded_height, 0);
+    }
+
+    #[test]
+    fn previous_280x408_default_becomes_auto_rail() {
+        let dir = tempdir();
+        let mut settings = Settings::default();
+        settings.dock_expanded_width = 280;
+        settings.dock_expanded_height = 408;
+        settings.dock_item_count = 5;
+        save(&dir, &settings).unwrap();
+        let loaded = load(&dir);
+        assert_eq!(loaded.dock_expanded_width, 0);
+        assert_eq!(loaded.dock_expanded_height, 0);
+        assert_eq!(loaded.dock_item_count, 10);
+    }
+
+    #[test]
+    fn skinny_84px_rail_becomes_auto() {
+        let dir = tempdir();
+        let mut settings = Settings::default();
+        settings.dock_expanded_width = 84;
+        settings.dock_expanded_height = 320;
+        save(&dir, &settings).unwrap();
+        let loaded = load(&dir);
+        assert_eq!(loaded.dock_expanded_width, 0);
+        assert_eq!(loaded.dock_expanded_height, 0);
     }
 
     #[test]
     fn save_then_load_round_trips() {
         let dir = tempdir();
         let mut settings = Settings::default();
-        settings.bindings = Bindings { left: Action::None, right: Action::Capture };
+        settings.bindings = Bindings {
+            left: Action::None,
+            right: Action::Capture,
+        };
         settings.theme = "dracula".to_string();
-        settings.notify_on_save = true;
+        settings.notification_style = NotificationStyle::Custom;
+        settings.notify_sound_name = "Ping".to_string();
+        settings.notify_sound_volume = 80;
+        settings.toast_position = ToastPosition::Custom;
+        settings.toast_custom_x = 120;
+        settings.toast_custom_y = 40;
+        settings.notify_content = NotifyContent::IconExcerpt;
+        settings.toast_duration_ms = 3000;
+        settings.toast_font_scale = 125;
+        settings.panel_width = 800;
+        settings.panel_height = 500;
+        settings.panel_x = 40;
+        settings.panel_y = 80;
+        settings.panel_placed = true;
         save(&dir, &settings).unwrap();
         let loaded = load(&dir);
         assert_eq!(loaded.bindings.left, Action::None);
         assert_eq!(loaded.theme, "dracula");
-        assert!(loaded.notify_on_save);
+        assert_eq!(loaded.notification_style, NotificationStyle::Custom);
+        assert_eq!(loaded.notify_sound_name, "Ping");
+        assert_eq!(loaded.notify_sound_volume, 80);
+        assert_eq!(loaded.toast_position, ToastPosition::Custom);
+        assert_eq!(loaded.toast_custom_x, 120);
+        assert_eq!(loaded.toast_custom_y, 40);
+        assert_eq!(loaded.notify_content, NotifyContent::IconExcerpt);
+        assert_eq!(loaded.toast_duration_ms, 3000);
+        assert_eq!(loaded.toast_font_scale, 125);
+        assert_eq!(loaded.panel_width, 800);
+        assert_eq!(loaded.panel_height, 500);
+        assert_eq!(loaded.panel_x, 40);
+        assert_eq!(loaded.panel_y, 80);
+        assert!(loaded.panel_placed);
+    }
+
+    #[test]
+    fn save_never_persists_the_s3_secret_access_key_to_disk() {
+        let dir = tempdir();
+        let mut settings = Settings::default();
+        settings.s3.secret_access_key = "super-secret-value".to_string();
+        save(&dir, &settings).unwrap();
+        let raw = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(!raw.contains("super-secret-value"));
+        assert_eq!(load(&dir).s3.secret_access_key, "");
+    }
+
+    /// Real end-to-end check against the actual OS keychain (not run by
+    /// default — CI/sandboxed environments may not have one unlocked, and
+    /// this touches the same entry the running app itself uses). Run
+    /// manually with `cargo test --lib s3_secret_round_trips_through_the_real_keychain -- --ignored`.
+    #[test]
+    #[ignore = "touches the real OS keychain — run manually"]
+    fn s3_secret_round_trips_through_the_real_keychain() {
+        set_s3_secret_access_key("smoke-test-value-12345").expect("set");
+        assert_eq!(
+            s3_secret_access_key().as_deref(),
+            Some("smoke-test-value-12345")
+        );
+        clear_s3_secret_access_key().expect("clear");
+        assert_eq!(s3_secret_access_key(), None);
+        // Clearing an already-cleared entry must stay a no-op, not an error.
+        clear_s3_secret_access_key().expect("clear again");
     }
 
     #[test]
@@ -199,7 +542,8 @@ mod tests {
     }
 
     fn tempdir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("shiftshift-settings-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("shiftshift-settings-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

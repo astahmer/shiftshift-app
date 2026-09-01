@@ -35,17 +35,28 @@ impl S3Store {
         if settings.bucket.is_empty() || settings.endpoint.is_empty() {
             return Err("S3 settings need at least a bucket and an endpoint".to_string());
         }
-        let region = Region::Custom { region: settings.region.clone(), endpoint: settings.endpoint.clone() };
+        let region = Region::Custom {
+            region: settings.region.clone(),
+            endpoint: settings.endpoint.clone(),
+        };
+        // The secret never lives on `settings` itself (see `S3Settings`'s
+        // doc comment) — it's fetched from the OS keychain here, the one
+        // place that actually needs the real value.
+        let secret_access_key = crate::settings::s3_secret_access_key().unwrap_or_default();
         let credentials = Credentials::new(
             Some(&settings.access_key_id),
-            Some(&settings.secret_access_key),
+            Some(&secret_access_key),
             None,
             None,
             None,
         )
         .map_err(|e| e.to_string())?;
-        let bucket = Bucket::new(&settings.bucket, region, credentials).map_err(|e| e.to_string())?;
-        Ok(Self { bucket, prefix: settings.prefix.clone() })
+        let bucket =
+            Bucket::new(&settings.bucket, region, credentials).map_err(|e| e.to_string())?;
+        Ok(Self {
+            bucket,
+            prefix: settings.prefix.clone(),
+        })
     }
 
     fn item_key(&self, id: &str) -> String {
@@ -57,37 +68,63 @@ impl S3Store {
     }
 
     fn get_item(&self, id: &str) -> Result<Item, String> {
-        let response = self.bucket.get_object(self.item_key(id)).map_err(|e| e.to_string())?;
+        let response = self
+            .bucket
+            .get_object(self.item_key(id))
+            .map_err(|e| e.to_string())?;
         serde_json::from_slice(response.as_slice()).map_err(|e| e.to_string())
     }
 
     fn put_item(&self, item: &Item) -> Result<(), String> {
         let bytes = serde_json::to_vec(item).map_err(|e| e.to_string())?;
-        self.bucket.put_object(self.item_key(&item.id), &bytes).map_err(|e| e.to_string())?;
+        self.bucket
+            .put_object(self.item_key(&item.id), &bytes)
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 }
 
 impl Store for S3Store {
     fn list_items(&self) -> Result<Vec<Item>, String> {
-        let pages = self.bucket.list(format!("{}items/", self.prefix), None).map_err(|e| e.to_string())?;
+        let pages = self
+            .bucket
+            .list(format!("{}items/", self.prefix), None)
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         for page in pages {
             for object in page.contents {
-                let response = self.bucket.get_object(&object.key).map_err(|e| e.to_string())?;
-                items.push(serde_json::from_slice::<Item>(response.as_slice()).map_err(|e| e.to_string())?);
+                let response = self
+                    .bucket
+                    .get_object(&object.key)
+                    .map_err(|e| e.to_string())?;
+                items.push(
+                    serde_json::from_slice::<Item>(response.as_slice())
+                        .map_err(|e| e.to_string())?,
+                );
             }
         }
         items.sort_by(|a, b| {
-            b.bookmarked.cmp(&a.bookmarked).then(b.rank.total_cmp(&a.rank)).then(b.created_at.cmp(&a.created_at))
+            b.bookmarked
+                .cmp(&a.bookmarked)
+                .then(b.rank.total_cmp(&a.rank))
+                .then(b.created_at.cmp(&a.created_at))
         });
         let history = self.list_history(u32::MAX)?;
         super::apply_copy_stats(&mut items, &history);
         Ok(items)
     }
 
-    fn add_item(&self, text: &str, kind: ItemKind, source_app: Option<String>) -> Result<Item, String> {
-        let max_rank = self.list_items()?.iter().map(|i| i.rank).fold(0.0, f64::max);
+    fn add_item(
+        &self,
+        text: &str,
+        kind: ItemKind,
+        source_app: Option<String>,
+    ) -> Result<Item, String> {
+        let max_rank = self
+            .list_items()?
+            .iter()
+            .map(|i| i.rank)
+            .fold(0.0, f64::max);
         let item = Item {
             id: uuid::Uuid::new_v4().to_string(),
             kind,
@@ -130,7 +167,9 @@ impl Store for S3Store {
     }
 
     fn delete_item(&self, id: &str) -> Result<(), String> {
-        self.bucket.delete_object(self.item_key(id)).map_err(|e| e.to_string())?;
+        self.bucket
+            .delete_object(self.item_key(id))
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -161,7 +200,12 @@ impl Store for S3Store {
         self.put_item(&item)
     }
 
-    fn log_event(&self, item_id: Option<&str>, action: &str, detail: Option<&str>) -> Result<(), String> {
+    fn log_event(
+        &self,
+        item_id: Option<&str>,
+        action: &str,
+        detail: Option<&str>,
+    ) -> Result<(), String> {
         let entry = HistoryEntry {
             id: uuid::Uuid::new_v4().to_string(),
             item_id: item_id.map(|s| s.to_string()),
@@ -170,17 +214,28 @@ impl Store for S3Store {
             at: chrono::Utc::now().to_rfc3339(),
         };
         let bytes = serde_json::to_vec(&entry).map_err(|e| e.to_string())?;
-        self.bucket.put_object(self.history_key(&entry.id), &bytes).map_err(|e| e.to_string())?;
+        self.bucket
+            .put_object(self.history_key(&entry.id), &bytes)
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
     fn list_history(&self, limit: u32) -> Result<Vec<HistoryEntry>, String> {
-        let pages = self.bucket.list(format!("{}history/", self.prefix), None).map_err(|e| e.to_string())?;
+        let pages = self
+            .bucket
+            .list(format!("{}history/", self.prefix), None)
+            .map_err(|e| e.to_string())?;
         let mut entries = Vec::new();
         for page in pages {
             for object in page.contents {
-                let response = self.bucket.get_object(&object.key).map_err(|e| e.to_string())?;
-                entries.push(serde_json::from_slice::<HistoryEntry>(response.as_slice()).map_err(|e| e.to_string())?);
+                let response = self
+                    .bucket
+                    .get_object(&object.key)
+                    .map_err(|e| e.to_string())?;
+                entries.push(
+                    serde_json::from_slice::<HistoryEntry>(response.as_slice())
+                        .map_err(|e| e.to_string())?,
+                );
             }
         }
         entries.sort_by(|a, b| b.at.cmp(&a.at));
@@ -195,13 +250,19 @@ mod tests {
 
     #[test]
     fn open_rejects_a_bucket_without_an_endpoint() {
-        let settings = S3Settings { bucket: "my-bucket".to_string(), ..S3Settings::default() };
+        let settings = S3Settings {
+            bucket: "my-bucket".to_string(),
+            ..S3Settings::default()
+        };
         assert!(S3Store::open(&settings).is_err());
     }
 
     #[test]
     fn open_rejects_an_endpoint_without_a_bucket() {
-        let settings = S3Settings { endpoint: "https://s3.example.com".to_string(), ..S3Settings::default() };
+        let settings = S3Settings {
+            endpoint: "https://s3.example.com".to_string(),
+            ..S3Settings::default()
+        };
         assert!(S3Store::open(&settings).is_err());
     }
 }
