@@ -11,6 +11,8 @@
 		"global-shortcut:default",
 		"autostart:default",
 		"shell:allow-open",
-		"notification:default"
+		"notification:default",
+		"updater:default",
+		"process:default"
 	]
 }

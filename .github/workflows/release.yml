@@ -1,0 +1,74 @@
+name: Release
+
+# Triggered by pushing a `vX.Y.Z` tag — see scripts/release.sh, which bumps
+# versions and creates that tag locally (it does NOT push; pushing the tag
+# is what actually fires this workflow, so it's a deliberate, separate step).
+#
+# macOS-only for now, even though the core capture path also works on
+# Linux (X11) as of this writing — verified via scripts/linux-test-docker.sh,
+# see RELEASE.md's platform-status section. Not adding a Linux build matrix
+# entry yet purely because it hasn't been packaged/smoke-tested as an actual
+# .deb/AppImage release artifact, not because the feature doesn't work.
+# Windows uses the same code path but is fully untested — don't add it
+# without verifying on real Windows first.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.0"
+          # Both Intel and Apple Silicon targets — macos-latest runners are
+          # arm64-only hardware, so without this the DMG would silently
+          # only work on Apple Silicon Macs. `--target universal-apple-darwin`
+          # below is what actually links the two into one binary.
+          targets: "x86_64-apple-darwin,aarch64-apple-darwin"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.1.0
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Signing/notarization only happens if the APPLE_* secrets exist (see
+      # RELEASE.md's checklist) — without them this still produces an
+      # unsigned .dmg, same as a local `pnpm tauri build`. Same story for
+      # the updater artifact signature: TAURI_SIGNING_PRIVATE_KEY needs to
+      # be set as a repo secret (see RELEASE.md's auto-update section for
+      # the keypair — it was generated locally, not by this workflow).
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "shiftshift ${{ github.ref_name }}"
+          releaseBody: "See CHANGELOG.md."
+          # Draft, not published — a human still reviews and hits "Publish"
+          # even after everything else here is automated (see RELEASE.md).
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true
+          args: --target universal-apple-darwin

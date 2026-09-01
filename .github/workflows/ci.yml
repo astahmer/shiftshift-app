@@ -1,0 +1,65 @@
+name: CI
+
+# Runs the test suite on every push/PR — separate from release.yml, which
+# only fires on a version tag and does the full signed macOS bundle build.
+# This is the cheap "did anything break" check.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.1.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm test
+      - run: pnpm run build
+
+  macos:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.0"
+      - run: cargo build --lib
+      - run: cargo test --lib
+      - run: cargo clippy --lib
+
+  # Linux (X11) support is real as of this writing — press_copy_chord's
+  # rdev-based Ctrl+C simulation, verified against a live X11 display in
+  # scripts/linux-test-docker.sh. This job is the lightweight regression
+  # check (compiles + unit tests); the full X11 integration test needs
+  # Xvfb/xdotool/python3-gi, which is why it lives in that separate script
+  # rather than here.
+  linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.93.0"
+      - name: Install Tauri Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev libssl-dev \
+            libx11-dev libxtst-dev libxi-dev libxdo-dev
+      - run: cargo build --lib
+      - run: cargo test --lib

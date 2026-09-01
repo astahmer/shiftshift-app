@@ -20,7 +20,14 @@ either.
 - **Native double-Shift hook**: a real `CGEventTap` on macOS
   (`src-tauri/src/mac_tap.rs`), `rdev` on Linux/Windows
   (`src-tauri/src/capture.rs`), with `CmdOrCtrl+Shift+Space/C` global-shortcut
-  fallback when the raw hook is unavailable or denied.
+  fallback when the raw hook is unavailable or denied. Capturing the actual
+  selection (not just detecting the gesture) simulates the platform copy
+  chord — `enigo` on macOS, `rdev::simulate` (Ctrl+C) on Linux/Windows,
+  see `capture.rs::press_copy_chord`. **Linux is X11 only** — both the
+  gesture hook and the copy-chord simulation use XTest/X11 APIs directly
+  and are no-ops under Wayland (use the fallback shortcuts there); verified
+  for real (not just compiled) against a live X11 display in a container —
+  see `scripts/linux-test-docker.sh`.
 - **Storage**: shiftshift's "pick a backend" model — a `Store` trait is the
   seam. `LocalSqliteStore` (default) and `S3Store` (any S3-compatible
   bucket, single-writer only) both implement it; picking one is a Settings
@@ -55,6 +62,30 @@ Corepack) pnpm 12.1.0 — no rustup/nvm setup needed. See `flake.nix` for why it
 doesn't need to fight the Nix-cc-shadowing problem above: the `.cargo/config.toml`
 override already wins regardless of what the flake puts on `PATH`.
 
+The flake can also build the app hermetically, without needing the dev
+toolchain installed at all:
+
+```bash
+nix build            # or: nix build .#default
+./result/bin/shiftshift-tauri
+```
+
+```bash
+nix build .#shift    # the standalone `shift` CLI (src-tauri/src/bin/shift.rs)
+./result/bin/shift "note text"
+```
+
+This produces the raw `shiftshift-tauri`/`shift` binaries (frontend assets
+embedded at compile time, since `tauri::generate_context!()` reads
+`frontendDist` at build time, not runtime) — **not** a signed/notarized
+`.app` bundle. Getting a bit-perfect bundle out of a Nix derivation would
+mean reimplementing Tauri's bundler (codesigning, `Info.plist`, DMG, etc.);
+for a real `.app` use `pnpm tauri build`.
+
+Note: like any local git flake, `nix build` only sees files known to git
+(`git add`ed, even if uncommitted) — brand-new untracked files won't be
+visible to the build until staged.
+
 ### Option B: rustup + your own Node
 
 ```bash
@@ -83,13 +114,14 @@ work.
   bindings, fallback shortcuts, notifications, sync backend, snippet
   templates, Markdown export, history. All persist to `settings.json` and
   apply live, no restart needed (except the sync backend choice).
-- **Themes**: 22 built-in presets (Tokyo Night, Dracula, Nord, Catppuccin,
+- **Themes**: 39 built-in presets (Tokyo Night, Dracula, Nord, Catppuccin,
   Gruvbox, Rosé Pine, Solarized, GitHub, VS Code, One Dark — each with a
-  light/dark sibling — plus Glass, Neobrutalism, Paper, Windows 95, Raycast,
-  and Discord, which also override structural tokens like corner radius,
-  shadow, border width, and backdrop blur, not just colors — see the
-  `--radius`/`--shadow`/`--backdrop-blur`/`--bg-alpha` custom properties in
-  `src/style.css`) — see `src/themes.ts`. Switch from Settings, or type
+  light/dark sibling — plus Glass, Neobrutalism, Paper, Windows 95 / Vista /
+  7, macOS, Terminal, Codex, Raycast, and Discord, which also override
+  structural tokens like corner radius, shadow, border width, and backdrop
+  blur, not just colors — see the `--radius`/`--shadow`/`--backdrop-blur`/
+  `--bg-alpha` custom properties in `src/style.css`) — see `src/themes.ts`.
+  Switch from Settings, or type
   `/theme` (suggests every theme, filtered as you keep typing), `/light`/
   `/dark` (suggests just that mode's themes). Both live-preview the
   highlighted suggestion as you arrow through it — `Enter` persists,
@@ -119,10 +151,13 @@ work.
   item's text also render as a small pill in the row.
   `↑`/`↓` selects a row, `Enter` copies note/todo text (or opens a link, or
   copies an image back to the clipboard) and closes the panel; `⌘C` does the
-  same but leaves the panel open. `⌘Enter` always saves the typed text as a
-  new item regardless of selection. `Shift+Enter` adds the selected row to a
-  multi-selection; plain `Enter` with one or more selected copies them as a
-  numbered list ("1. foo\n2. bar") and closes. `Space` toggles a selected
+  same but leaves the panel open. `⌘Enter` force-saves the typed text as a
+  new item and stays open without touching the clipboard. `⇧Enter` force-saves,
+  copies the new text, and stays open. `Tab` completes the highlighted item
+  or suggestion (`/theme`, `@`, `#`); empty `Tab` cycles list tabs.
+  `⌃Space` toggles a row in or out of a disjoint multi-selection; `⇧↑`/`⇧↓`
+  extend a contiguous range. Plain `Enter` with one or more selected copies
+  them as a numbered list ("1. foo\n2. bar") and closes. `Space` toggles a selected
   todo's done state, `⌘B` bookmarks (bookmarked rows get a persistent accent
   bar on the left edge, not just the star button on hover), `⌘T` toggles
   todo/not-todo, `⌘E` edits inline, `⌥↑`/`⌥↓` reorders (unfiltered view
@@ -151,11 +186,25 @@ work.
 - **Triple-tap → todo**: a third Shift tap fast-following a capture double-tap
   flips that just-saved item to a todo, without delaying the double-tap's own
   (instant) fire — see the `Fired::PromoteToTodo` path in `capture.rs`.
-- **Save notifications**: opt-in (off by default), with an optional sound —
-  see Settings → Notifications. In `pnpm tauri dev`, macOS shows these under
-  Terminal's notification permission (Tauri's dev-mode identity workaround),
-  not shiftshift's — check System Settings → Notifications → Terminal if
-  nothing appears in dev.
+- **Save notifications**: off by default — Settings → Notifications picks a
+  style (none / native OS banner / "ours" — a small animated check-and-
+  sparkle toast, smaller than a native banner, in its own always-on-top
+  window, see `src-tauri/src/toast.rs` and `src/toast.ts`), plus an
+  independent sound choice (any built-in macOS system sound) and volume,
+  with a "Preview" button to audition it before saving. "Ours" is
+  positionable via a 3x3 grid (corners/edges/center) or by grabbing the live
+  sample toast and dropping it anywhere on screen — it snaps to the nearest
+  grid spot if you drop it close to one, otherwise keeps the exact spot. In
+  `pnpm tauri dev`, native notifications show up under Terminal's
+  notification permission (Tauri's dev-mode identity workaround), not
+  shiftshift's — check System Settings → Notifications → Terminal if nothing
+  appears in dev.
+- **Recent-items dock** (Settings → Dock, off by default): a small
+  always-visible pill — a live count of your items, click to expand into
+  the last few captures, click one to copy it and collapse back. Positioned
+  the same way as the toast (3x3 grid or drag-to-place, defaults to
+  top-center for MacBooks with a notch), reusing its positioning code —
+  see `src-tauri/src/dock.rs` and `src/dock.ts`.
 - **History**: a chronological log of what was created, edited, bookmarked,
   converted, used (copied/opened), and deleted — both in Settings → History
   and inline via `/history` (filter by typing after it, e.g. `/history
