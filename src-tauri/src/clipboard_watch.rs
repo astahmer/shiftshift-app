@@ -27,35 +27,55 @@ pub fn note_own_write(text: &str) {
 /// clipboard right now, so turning the setting on doesn't immediately
 /// re-capture something that was already there.
 pub fn start(app: AppHandle) {
-    if let Ok(mut clip) = arboard::Clipboard::new() {
-        if let Ok(text) = clip.get_text() {
-            note_own_write(&text);
+    std::thread::spawn(move || {
+        let mut seeded = false;
+        loop {
+            std::thread::sleep(POLL_INTERVAL);
+            if !seeded {
+                if let Ok(mut clip) = arboard::Clipboard::new() {
+                    if let Ok(text) = clip.get_text() {
+                        note_own_write(&text);
+                    }
+                }
+                seeded = true;
+            }
+            let enabled = app
+                .state::<SettingsState>()
+                .0
+                .lock()
+                .unwrap()
+                .clipboard_watch;
+            if !enabled {
+                continue;
+            }
+            let Ok(mut clip) = arboard::Clipboard::new() else {
+                continue;
+            };
+            let Ok(text) = clip.get_text() else { continue };
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let mut last = LAST_KNOWN_CLIPBOARD.lock().unwrap();
+            if last.as_deref() == Some(text.as_str()) {
+                continue;
+            }
+            *last = Some(text.clone());
+            drop(last);
+            let source =
+                crate::capture::frontmost_app_name().unwrap_or_else(|| "Clipboard".to_string());
+            let excluded = app
+                .state::<SettingsState>()
+                .0
+                .lock()
+                .unwrap()
+                .excluded_apps
+                .clone();
+            if is_excluded_app(&source, &excluded) {
+                continue;
+            }
+            let _ = crate::capture::handle_captured_text(&app, trimmed, Some(source));
         }
-    }
-    std::thread::spawn(move || loop {
-        std::thread::sleep(POLL_INTERVAL);
-        let enabled = app.state::<SettingsState>().0.lock().unwrap().clipboard_watch;
-        if !enabled {
-            continue;
-        }
-        let Ok(mut clip) = arboard::Clipboard::new() else { continue };
-        let Ok(text) = clip.get_text() else { continue };
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let mut last = LAST_KNOWN_CLIPBOARD.lock().unwrap();
-        if last.as_deref() == Some(text.as_str()) {
-            continue;
-        }
-        *last = Some(text.clone());
-        drop(last);
-        let source = crate::capture::frontmost_app_name().unwrap_or_else(|| "Clipboard".to_string());
-        let excluded = app.state::<SettingsState>().0.lock().unwrap().excluded_apps.clone();
-        if is_excluded_app(&source, &excluded) {
-            continue;
-        }
-        let _ = crate::capture::handle_captured_text(&app, trimmed, Some(source));
     });
 }
 
