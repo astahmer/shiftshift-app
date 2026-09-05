@@ -61,6 +61,55 @@ export type MoveDirection = "up" | "down";
 
 export type SortMode = "manual" | "newest" | "oldest" | "az" | "za";
 
+export type CollectionField = "tag" | "kind" | "done" | "bookmarked" | "source_app" | "text" | "created_at";
+export type CollectionOperator = "equals" | "contains" | "before" | "after";
+
+export interface CollectionPredicate {
+	field: CollectionField;
+	operator: CollectionOperator;
+	value: string;
+}
+
+export interface CollectionQuery {
+	all: CollectionPredicate[];
+	any: CollectionPredicate[];
+	none: CollectionPredicate[];
+}
+
+export interface Collection {
+	id: string;
+	name: string;
+	query: CollectionQuery;
+	sort: SortMode;
+	rank: number;
+	icon: string | null;
+	color: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface AutomationView {
+	id: string;
+	label: string;
+	description: string;
+	icon: string;
+	query: CollectionQuery;
+	sort: SortMode;
+	enabled: boolean;
+}
+
+export type AutomationEvent = "item.created" | "item.updated" | "item.used" | "item.bookmarked" | "item.deleted";
+
+export interface AutomationHook {
+	id: string;
+	enabled: boolean;
+	events: AutomationEvent[];
+	command: string;
+	args: string[];
+	timeout_ms: number;
+	views: AutomationView[];
+}
+
 export interface Bindings {
 	left: Action;
 	right: Action;
@@ -115,10 +164,13 @@ export interface Settings {
 	/** macOS inline autocorrect on the capture input. Off by default. */
 	input_spellcheck: boolean;
 	clipboard_watch: boolean;
+	/** One list-tab per distinct #tag (the default) vs. a single combined "Tags" tab with its own multi-select. */
+	separate_tag_tabs: boolean;
 	launch_at_login: boolean;
 	backend: "local" | "s3" | "folder";
 	s3: S3Settings;
 	sort_mode: SortMode;
+	automation_hooks: AutomationHook[];
 	show_in_dock: boolean;
 	show_tray_icon: boolean;
 	folder_path: string;
@@ -148,6 +200,7 @@ export interface Item {
 	id: string;
 	kind: ItemKind;
 	text: string;
+	tags: string[];
 	done: boolean;
 	bookmarked: boolean;
 	rank: number;
@@ -229,6 +282,18 @@ export class Store {
 		return invoke("list_items");
 	}
 
+	static listCollections(): Promise<Collection[]> {
+		return invoke("list_collections");
+	}
+
+	static saveCollection(collection: Collection): Promise<void> {
+		return invoke("save_collection", { collection });
+	}
+
+	static deleteCollection(id: string): Promise<void> {
+		return invoke("delete_collection", { id });
+	}
+
 	static addItem(text: string, kind: ItemKind): Promise<Item> {
 		return invoke("add_item", { text, kind });
 	}
@@ -243,6 +308,10 @@ export class Store {
 
 	static setKind(id: string, kind: ItemKind): Promise<void> {
 		return invoke("set_kind", { id, kind });
+	}
+
+	static setItemTags(id: string, tags: string[]): Promise<void> {
+		return invoke("set_item_tags", { id, tags });
 	}
 
 	static updateItemText(id: string, text: string): Promise<void> {
@@ -298,6 +367,10 @@ export class Store {
 
 	static fetchLinkPreview(url: string): Promise<LinkPreview> {
 		return invoke("fetch_link_preview", { url });
+	}
+
+	static prepareIcloudFolder(): Promise<string> {
+		return invoke("prepare_icloud_folder");
 	}
 
 	/** Whether the double-Shift hook can actually run right now — always `true` on non-mac. */
@@ -463,6 +536,10 @@ export class Store {
 
 	static deleteTemplate(id: string): Promise<void> {
 		return invoke("delete_template", { id });
+	}
+
+	static replaceTemplates(templates: Template[]): Promise<void> {
+		return invoke("replace_templates", { next: templates });
 	}
 
 	static listCustomThemes(): Promise<CustomTheme[]> {

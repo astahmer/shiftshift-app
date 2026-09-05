@@ -1,4 +1,13 @@
-import type { Item, SortMode, Template, ThemeColors } from "./store";
+import type {
+	AutomationView,
+	Collection,
+	CollectionPredicate,
+	CollectionQuery,
+	Item,
+	SortMode,
+	Template,
+	ThemeColors,
+} from "./store";
 
 const TODO_PREFIX = "/todo ";
 
@@ -95,32 +104,170 @@ function tagPredicate(token: string): ((item: Item) => boolean) | null {
 	return null;
 }
 
-export type ListTab = "recent" | "bookmarked" | "images" | "todos";
+/**
+ * `tag:${name}` is one tab per distinct #tag (the default — see
+ * `buildListTabs`); `tags` is the single combined tab a `separate_tag_tabs:
+ * false` setting switches to, which needs its own multi-select state (see
+ * `TAG_TABS_SETTING` callers) since the tab id alone can't carry "which
+ * tags are currently selected".
+ */
+export type ListTab =
+	| "recent"
+	| "bookmarked"
+	| "images"
+	| "todos"
+	| "tags"
+	| `tag:${string}`
+	| `collection:${string}`
+	| `automation:${string}`;
 
-export const LIST_TABS: Array<{ id: ListTab; label: string }> = [
+const BUILTIN_LIST_TABS: Array<{ id: ListTab; label: string }> = [
 	{ id: "recent", label: "Recent" },
 	{ id: "bookmarked", label: "Bookmarked" },
 	{ id: "images", label: "Images" },
 	{ id: "todos", label: "TODOs" },
 ];
 
-export function itemsForTab(items: Item[], tab: ListTab): Item[] {
+/**
+ * The full tab bar for right now: the four fixed tabs, plus either one tab
+ * per distinct #tag in use or a single combined "Tags" tab, depending on
+ * the `separate_tag_tabs` setting. Recomputed on every render (not cached)
+ * since the tag set changes as items are captured/edited/deleted.
+ */
+export function buildListTabs(
+	items: Item[],
+	separateTagTabs: boolean,
+	collections: Collection[] = [],
+	automationViews: AutomationView[] = [],
+): Array<{ id: ListTab; label: string }> {
+	const builtins = separateTagTabs
+		? [...BUILTIN_LIST_TABS, ...extractTags(items).map((tag) => ({ id: `tag:${tag}` as const, label: `#${tag}` }))]
+		: [...BUILTIN_LIST_TABS, { id: "tags" as const, label: "Tags" }];
+	const collectionTabs = collections.map((collection) => ({
+		id: `collection:${collection.id}` as const,
+		label: `${collection.icon ? `${collection.icon} ` : ""}${collection.name}`,
+	}));
+	const automationTabs = automationViews.map((view) => ({
+		id: `automation:${view.id}` as const,
+		label: `${view.icon ? `${view.icon} ` : ""}${view.label}`,
+	}));
+	return [...builtins, ...collectionTabs, ...automationTabs];
+}
+
+function itemHasTag(item: Item, tag: string): boolean {
+	if ((item.tags ?? []).some((candidate) => candidate.toLowerCase() === tag.toLowerCase())) return true;
+	for (const match of item.text.matchAll(HASHTAG_PATTERN)) {
+		if (match[1]!.toLowerCase() === tag.toLowerCase()) return true;
+	}
+	return false;
+}
+
+function predicateMatches(item: Item, predicate: CollectionPredicate): boolean {
+	const value = predicate.value.trim();
+	const lowerValue = value.toLowerCase();
+	switch (predicate.field) {
+		case "tag":
+			return predicate.operator === "equals" && itemHasTag(item, value);
+		case "kind":
+			return predicate.operator === "equals" && item.kind === lowerValue;
+		case "done":
+			return predicate.operator === "equals" && String(item.done) === lowerValue;
+		case "bookmarked":
+			return predicate.operator === "equals" && String(item.bookmarked) === lowerValue;
+		case "source_app": {
+			const source = item.source_app?.toLowerCase() ?? "";
+			return predicate.operator === "equals" ? source === lowerValue : source.includes(lowerValue);
+		}
+		case "text": {
+			const text = item.text.toLowerCase();
+			return predicate.operator === "equals" ? text === lowerValue : text.includes(lowerValue);
+		}
+		case "created_at": {
+			const itemTime = Date.parse(item.created_at);
+			const valueTime = Date.parse(value);
+			if (!Number.isFinite(itemTime) || !Number.isFinite(valueTime)) return false;
+			if (predicate.operator === "before") return itemTime < valueTime;
+			if (predicate.operator === "after") return itemTime > valueTime;
+			return false;
+		}
+	}
+}
+
+/** Evaluates a portable collection/plugin-view query against one item. */
+export function matchesCollectionQuery(item: Item, query: CollectionQuery): boolean {
+	const all = query?.all ?? [];
+	const any = query?.any ?? [];
+	const none = query?.none ?? [];
+	return (
+		all.every((predicate) => predicateMatches(item, predicate)) &&
+		(any.length === 0 || any.some((predicate) => predicateMatches(item, predicate))) &&
+		none.every((predicate) => !predicateMatches(item, predicate))
+	);
+}
+
+/**
+ * `selectedTags` only matters for the combined `"tags"` tab (ignored
+ * otherwise) — it's the multi-select state that tab's own pill row manages,
+ * since the plain tab id can't carry "which tags are checked right now".
+ * Empty/omitted selection shows nothing rather than everything tagged,
+ * matching "select one or more tags... to see everything tagged with them".
+ */
+export function itemsForTab(
+	items: Item[],
+	tab: ListTab,
+	selectedTags?: ReadonlySet<string>,
+	collections: Collection[] = [],
+	automationViews: AutomationView[] = [],
+): Item[] {
 	if (tab === "bookmarked") return items.filter((item) => item.bookmarked);
 	if (tab === "images") return items.filter((item) => item.kind === "image");
 	if (tab === "todos") return items.filter((item) => item.kind === "todo");
+	if (tab === "tags") {
+		if (!selectedTags || selectedTags.size === 0) return [];
+		return items.filter((item) => [...selectedTags].some((tag) => itemHasTag(item, tag)));
+	}
+	if (tab.startsWith("tag:")) {
+		const tag = tab.slice(4);
+		return items.filter((item) => itemHasTag(item, tag));
+	}
+	if (tab.startsWith("collection:")) {
+		const collection = collections.find((candidate) => candidate.id === tab.slice("collection:".length));
+		return collection ? items.filter((item) => matchesCollectionQuery(item, collection.query)) : [];
+	}
+	if (tab.startsWith("automation:")) {
+		const view = automationViews.find((candidate) => candidate.id === tab.slice("automation:".length));
+		return view ? items.filter((item) => matchesCollectionQuery(item, view.query)) : [];
+	}
 	return items;
 }
 
-export function nextListTab(current: ListTab, delta: number): ListTab {
-	const index = LIST_TABS.findIndex((tab) => tab.id === current);
-	return LIST_TABS[(index + delta + LIST_TABS.length) % LIST_TABS.length]!.id;
+export function nextListTab(tabs: Array<{ id: ListTab }>, current: ListTab, delta: number): ListTab {
+	const index = tabs.findIndex((tab) => tab.id === current);
+	// The current tab can be absent from `tabs` (its only tag was removed,
+	// or tags just got hidden by a settings change) — start from the front
+	// rather than wrapping from -1 into the last tab, which would read as
+	// "jumped to the end" instead of "reset".
+	const from = index === -1 ? -1 : index;
+	return tabs[(from + delta + tabs.length) % tabs.length]!.id;
 }
 
-export function emptyTabCopy(tab: ListTab, hasFilter: boolean): { title: string; body: string } {
+export function emptyTabCopy(
+	tab: ListTab,
+	hasFilter: boolean,
+	selectedTagsCount = 0,
+): { title: string; body: string } {
+	if (tab === "tags" && selectedTagsCount === 0) {
+		return { title: "Pick a tag", body: "Select one or more tags above to see everything tagged with them." };
+	}
 	if (hasFilter) return { title: "No matches", body: "Clear the filter or try another @tag / #tag." };
 	if (tab === "bookmarked") return { title: "No bookmarks", body: "Bookmark something and it shows up here." };
 	if (tab === "images") return { title: "No images", body: "Captured screenshots and pictures wait here." };
 	if (tab === "todos") return { title: "No TODOs", body: "Turn a note into a todo and it lands here." };
+	if (tab === "tags") return { title: "No matches", body: "Nothing tagged with the selected tags." };
+	if (tab.startsWith("tag:")) return { title: "No matches", body: `Nothing tagged #${tab.slice(4)} yet.` };
+	if (tab.startsWith("collection:") || tab.startsWith("automation:")) {
+		return { title: "No matches", body: "Nothing currently matches this view." };
+	}
 	return { title: "Nothing captured yet", body: "An answer, a link, a half-formed prompt. It all waits here." };
 }
 
@@ -136,6 +283,7 @@ export function filterItems(items: Item[], query: string): Item[] {
 	for (const token of tokens) {
 		const predicate = tagPredicate(token);
 		if (predicate) predicates.push(predicate);
+		else if (/^#[A-Za-z_][\w-]*$/.test(token)) predicates.push((item) => itemHasTag(item, token.slice(1)));
 		else textWords.push(token);
 	}
 	const text = textWords.join(" ").toLowerCase();
@@ -246,9 +394,10 @@ export const HELP_SHORTCUTS: Array<{ category: string; shortcut: string; descrip
 	{ category: "Capture", shortcut: "⌘V", description: "Paste a clipboard image as an image item" },
 	{ category: "Browse", shortcut: "↑ / ↓", description: "Move selection (wraps at both ends)" },
 	{ category: "Browse", shortcut: "Enter", description: "Copy/open the selected item and close" },
+	{ category: "Browse", shortcut: "⌘O", description: "Open the selected link externally" },
 	{ category: "Browse", shortcut: "Tab", description: "Complete the highlighted item or suggestion; empty Tab switches list tabs" },
 	{ category: "Browse", shortcut: "⌘C", description: "Copy the selection (newline-joined) without closing" },
-	{ category: "Browse", shortcut: "Shift+→", description: "Open the full detail view" },
+	{ category: "Browse", shortcut: "Preview / Shift+→", description: "Open the full detail view from a row action, right-click, or ⌘P" },
 	{ category: "Browse", shortcut: "⌥-click", description: "Open image in Preview" },
 	{ category: "Organize", shortcut: "⌘B", description: "Toggle bookmark" },
 	{ category: "Organize", shortcut: "⌘T", description: "Toggle todo/note" },
@@ -447,13 +596,57 @@ export function parseInlineMarkdown(text: string): MdSegment[] {
 
 const HASHTAG_PATTERN = /#([A-Za-z_][\w-]*)/g;
 
+/** Returns legacy inline hashtag metadata without touching ordinary text. */
+export function extractInlineTags(text: string): string[] {
+	const tags = new Set<string>();
+	for (const match of text.matchAll(HASHTAG_PATTERN)) tags.add(match[1]!.toLowerCase());
+	return [...tags];
+}
+
+/**
+ * Returns the text that should leave the app when a user copies an item.
+ * Inline hashtags are presentation/organization metadata, so they stay in
+ * the stored entry but do not leak into pasted text. Links and image paths
+ * are already payloads, and must be copied exactly as stored.
+ */
+export function copyableItemText(item: Pick<Item, "kind" | "text">): string {
+	if (item.kind === "link" || item.kind === "image") return item.text;
+
+	const parts: string[] = [];
+	let lastIndex = 0;
+	let removedTag = false;
+	INLINE_MARKDOWN.lastIndex = 0;
+	let match: RegExpExecArray | null;
+	while ((match = INLINE_MARKDOWN.exec(item.text))) {
+		parts.push(item.text.slice(lastIndex, match.index));
+		if (match[3] !== undefined) {
+			removedTag = true;
+			parts.push("\0");
+		} else {
+			parts.push(match[0]);
+		}
+		lastIndex = INLINE_MARKDOWN.lastIndex;
+	}
+	if (!removedTag) return item.text;
+	parts.push(item.text.slice(lastIndex));
+
+	return parts.join("").replace(/(?:[ \t]*\0[ \t]*)+/g, (match, offset: number, source: string) => {
+		const before = offset > 0 ? source[offset - 1] : undefined;
+		const afterIndex = offset + match.length;
+		const after = afterIndex < source.length ? source[afterIndex] : undefined;
+		return before && after && before !== "\n" && after !== "\n" ? " " : "";
+	});
+}
+
 /** Every distinct #hashtag used across all items, lowercased and sorted — powers `#` suggestions. */
 export function extractTags(items: Item[]): string[] {
 	const seen = new Set<string>();
 	for (const item of items) {
-		for (const match of item.text.matchAll(HASHTAG_PATTERN)) {
-			seen.add(match[1]!.toLowerCase());
+		for (const tag of item.tags ?? []) {
+			const normalized = tag.trim().toLowerCase();
+			if (normalized) seen.add(normalized);
 		}
+		for (const tag of extractInlineTags(item.text)) seen.add(tag);
 	}
 	return [...seen].sort();
 }
@@ -591,7 +784,7 @@ export function itemExternalDragText(item: Item): string {
 		const name = item.text.split("/").pop();
 		return name && name.length > 0 ? name : "image.png";
 	}
-	return item.text;
+	return copyableItemText(item);
 }
 
 export const LIST_DRAG_THRESHOLD = 8;
@@ -659,4 +852,3 @@ export function listDragNeedsSyntheticDown(state: ListDragState | null, buttons:
 export function listDragRowFromPoint(x: number, y: number): HTMLElement | null {
 	return document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drag-index]") ?? null;
 }
-

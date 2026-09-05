@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	applySort,
+	buildListTabs,
+	copyableItemText,
 	detectKind,
 	expandTemplate,
 	extractTags,
@@ -20,6 +22,7 @@ import {
 	matchSlashSuggestions,
 	matchSortSuggestions,
 	matchThemeSuggestions,
+	matchesCollectionQuery,
 	parseInlineMarkdown,
 	parseSlashMode,
 	parseUiCommand,
@@ -35,13 +38,14 @@ import {
 	pointerLeftWindow,
 	listDragNeedsSyntheticDown,
 } from "./capture-logic";
-import type { Item, Template } from "./store";
+import type { AutomationView, Collection, Item, Template } from "./store";
 
 function item(overrides: Partial<Item> & Pick<Item, "text">): Item {
 	return {
 		id: overrides.text,
 		kind: "note",
 		done: false,
+		tags: [],
 		bookmarked: false,
 		rank: 0,
 		source_app: null,
@@ -192,7 +196,8 @@ describe("list tabs", () => {
 		item({ text: "buy milk", kind: "todo" }),
 		item({ text: "https://example.com", kind: "link", bookmarked: true }),
 		item({ text: "shot", kind: "image" }),
-		item({ text: "idea", kind: "note" }),
+		item({ text: "idea #work", kind: "note" }),
+		item({ text: "call mom #home #urgent", kind: "note" }),
 	];
 
 	it("scopes the list to the active tab", () => {
@@ -202,15 +207,104 @@ describe("list tabs", () => {
 		expect(itemsForTab(items, "todos").map((row) => row.text)).toEqual(["buy milk"]);
 	});
 
+	it("scopes a per-tag tab to items carrying that tag", () => {
+		expect(itemsForTab(items, "tag:work").map((row) => row.text)).toEqual(["idea #work"]);
+		expect(itemsForTab(items, "tag:urgent").map((row) => row.text)).toEqual(["call mom #home #urgent"]);
+	});
+
+	it("scopes the combined tags tab to the union of selected tags", () => {
+		expect(itemsForTab(items, "tags")).toEqual([]);
+		expect(itemsForTab(items, "tags", new Set())).toEqual([]);
+		expect(itemsForTab(items, "tags", new Set(["work"])).map((row) => row.text)).toEqual(["idea #work"]);
+		expect(itemsForTab(items, "tags", new Set(["work", "home"])).map((row) => row.text)).toEqual([
+			"idea #work",
+			"call mom #home #urgent",
+		]);
+	});
+
+	it("builds one tab per distinct tag by default", () => {
+		const tabs = buildListTabs(items, true);
+		expect(tabs.map((tab) => tab.id)).toEqual([
+			"recent",
+			"bookmarked",
+			"images",
+			"todos",
+			"tag:home",
+			"tag:urgent",
+			"tag:work",
+		]);
+	});
+
+	it("builds a single combined Tags tab when disabled", () => {
+		const tabs = buildListTabs(items, false);
+		expect(tabs.map((tab) => tab.id)).toEqual(["recent", "bookmarked", "images", "todos", "tags"]);
+	});
+
+	it("adds saved collections and enabled automation views as tabs", () => {
+		const collection: Collection = {
+			id: "work",
+			name: "Work queue",
+			query: { all: [], any: [], none: [] },
+			sort: "newest",
+			rank: 1,
+			icon: "▣",
+			color: null,
+			created_at: "2026-01-01T00:00:00Z",
+			updated_at: "2026-01-01T00:00:00Z",
+		};
+		const view: AutomationView = {
+			id: "organizer:follow-up",
+			label: "Follow-up",
+			description: "Open follow-up items",
+			icon: "↗",
+			query: { all: [], any: [], none: [] },
+			sort: "oldest",
+			enabled: true,
+		};
+		const tabs = buildListTabs([], true, [collection], [view]);
+		expect(tabs.map((tab) => tab.id)).toContain("collection:work");
+		expect(tabs.map((tab) => tab.id)).toContain("automation:organizer:follow-up");
+		expect(tabs.find((tab) => tab.id === "collection:work")?.label).toBe("▣ Work queue");
+	});
+
+	it("evaluates collection and plugin queries against first-class tags", () => {
+		const tagged = item({ text: "send the report", kind: "todo", tags: ["Work"], source_app: "Mail" });
+		const query = {
+			all: [
+				{ field: "tag" as const, operator: "equals" as const, value: "work" },
+				{ field: "done" as const, operator: "equals" as const, value: "false" },
+			],
+			any: [{ field: "kind" as const, operator: "equals" as const, value: "todo" }],
+			none: [{ field: "bookmarked" as const, operator: "equals" as const, value: "true" }],
+		};
+		expect(matchesCollectionQuery(tagged, query)).toBe(true);
+		expect(itemsForTab([tagged], "collection:work", undefined, [
+			{ id: "work", name: "Work", query, sort: "manual", rank: 0, icon: null, color: null, created_at: "", updated_at: "" },
+		])).toEqual([tagged]);
+		expect(itemsForTab([tagged], "automation:organizer:follow-up", undefined, [], [
+			{ id: "organizer:follow-up", label: "Follow-up", description: "", icon: "", query, sort: "manual", enabled: true },
+		])).toEqual([tagged]);
+	});
+
 	it("wraps Tab cycling in both directions", () => {
-		expect(nextListTab("recent", 1)).toBe("bookmarked");
-		expect(nextListTab("todos", 1)).toBe("recent");
-		expect(nextListTab("recent", -1)).toBe("todos");
+		const tabs = buildListTabs([], true);
+		expect(nextListTab(tabs, "recent", 1)).toBe("bookmarked");
+		expect(nextListTab(tabs, "todos", 1)).toBe("recent");
+		expect(nextListTab(tabs, "recent", -1)).toBe("todos");
 	});
 
 	it("uses a filter empty-state when a query is active", () => {
 		expect(emptyTabCopy("todos", true).title).toBe("No matches");
 		expect(emptyTabCopy("todos", false).title).toBe("No TODOs");
+	});
+
+	it("prompts for a tag selection before showing the combined tags empty-state", () => {
+		expect(emptyTabCopy("tags", false, 0).title).toBe("Pick a tag");
+		expect(emptyTabCopy("tags", false, 1).title).toBe("No matches");
+	});
+
+	it("names the tag in a per-tag tab's empty-state", () => {
+		expect(emptyTabCopy("tag:work", false).body).toContain("#work");
 	});
 });
 
@@ -455,6 +549,32 @@ describe("parseInlineMarkdown", () => {
 	});
 });
 
+describe("copyableItemText", () => {
+	it("removes inline hashtags from copied notes", () => {
+		expect(copyableItemText(item({ text: "ship it #work" }))).toBe("ship it");
+		expect(copyableItemText(item({ text: "#work ship it #today" }))).toBe("ship it");
+	});
+
+	it("keeps non-tag text and numeric references intact", () => {
+		expect(copyableItemText(item({ text: "fixes #482" }))).toBe("fixes #482");
+		expect(copyableItemText(item({ text: "  keep  this  " }))).toBe("  keep  this  ");
+		expect(copyableItemText(item({ text: "keep  this #tag now" }))).toBe("keep  this now");
+	});
+
+	it("does not strip URL fragments or image paths", () => {
+		expect(copyableItemText(item({ kind: "link", text: "https://example.com/#section" }))).toBe(
+			"https://example.com/#section",
+		);
+		expect(copyableItemText(item({ kind: "image", text: "/tmp/shot#1.png" }))).toBe("/tmp/shot#1.png");
+	});
+
+	it("does not remove hashtag-looking text inside code or emphasis", () => {
+		expect(copyableItemText(item({ text: "`#literal` **#also-literal** #metadata" }))).toBe(
+			"`#literal` **#also-literal**",
+		);
+	});
+});
+
 describe("extractTags", () => {
 	it("collects unique lowercased hashtags across items", () => {
 		const list = [item({ text: "plan #Work stuff" }), item({ text: "more #work and #life" })];
@@ -463,6 +583,10 @@ describe("extractTags", () => {
 
 	it("ignores numeric-only references", () => {
 		expect(extractTags([item({ text: "see issue #482" })])).toEqual([]);
+	});
+
+	it("includes first-class metadata tags alongside legacy inline tags", () => {
+		expect(extractTags([item({ text: "plain note", tags: ["Work", "project-x"] })])).toEqual(["project-x", "work"]);
 	});
 });
 
