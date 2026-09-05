@@ -460,6 +460,11 @@ export function matchHashSuggestions(partial: string, items: Item[]): string[] {
 	return extractTags(items).filter((t) => t.startsWith(q));
 }
 
+/** Cleans up freeform "add a tag" input into a single hashtag-safe word: strips a leading #, collapses whitespace to hyphens. Empty in, empty out. */
+export function normalizeTagInput(raw: string): string {
+	return raw.trim().replace(/^#/, "").replace(/\s+/g, "-");
+}
+
 const THEME_COLOR_KEYS: Array<keyof ThemeColors> = ["bg", "fg", "muted", "row_bg", "accent", "accent_fg", "border"];
 
 export function isImportableThemeColors(value: unknown): value is ThemeColors {

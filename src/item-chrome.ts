@@ -116,6 +116,7 @@ export function itemContextEntries(item: Item, opts: { inSelection: boolean; sel
 		});
 		entries.push({ type: "item", id: "bookmark_selection", label: "Bookmark selected", hint: "⌘B" });
 		entries.push({ type: "item", id: "todo_selection", label: "Convert selected to todos", hint: "⌘T" });
+		entries.push({ type: "item", id: "tag_selection", label: "Tag selected..." });
 		entries.push({ type: "item", id: "delete_selection", label: "Delete selected", hint: "⌘⌫" });
 	}
 	return entries;

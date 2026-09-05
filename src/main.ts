@@ -21,6 +21,7 @@ import {
 	lastToken,
 	LIST_TABS,
 	nextListTab,
+	normalizeTagInput,
 	matchAtSuggestions,
 	matchHashSuggestions,
 	matchHelpEntries,
@@ -1259,6 +1260,10 @@ async function runItemChromeAction(item: Item, id: string): Promise<void> {
 	}
 	if (id === "delete_selection") {
 		await bulkDelete();
+		return;
+	}
+	if (id === "tag_selection") {
+		await bulkAddTag();
 	}
 }
 
@@ -1454,6 +1459,23 @@ async function bulkToggleTodo(): Promise<void> {
 	showStatusToast(`Toggled todo on ${selected.length} item${selected.length === 1 ? "" : "s"}`);
 }
 
+/** Appends the same `#tag` to every multi-selected item's text — the bulk counterpart of the detail view's single-item "Add a tag". */
+async function bulkAddTag(): Promise<void> {
+	const selected = items.filter((item) => multiSelected.has(item.id));
+	if (selected.length === 0) return;
+	const clean = normalizeTagInput(window.prompt(`Tag ${selected.length} item${selected.length === 1 ? "" : "s"} with:`) ?? "");
+	if (!clean) return;
+	const entries: UndoEntry[] = [];
+	for (const item of selected) {
+		const to = `${item.text} #${clean}`;
+		await Store.updateItemText(item.id, to);
+		entries.push({ type: "update_text", id: item.id, from: item.text, to });
+	}
+	pushUndo({ type: "bulk", entries });
+	await refresh();
+	showStatusToast(`Tagged ${selected.length} item${selected.length === 1 ? "" : "s"} with #${clean}`);
+}
+
 function formatAbsoluteTime(iso: string): string {
 	const date = new Date(iso);
 	return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
@@ -1565,7 +1587,7 @@ function buildDetailTags(item: Item): HTMLElement {
 		addRow.appendChild(datalist);
 	}
 	const addTag = async (): Promise<void> => {
-		const clean = tagInput.value.trim().replace(/^#/, "").replace(/\s+/g, "-");
+		const clean = normalizeTagInput(tagInput.value);
 		if (!clean) return;
 		const next = `${item.text} #${clean}`;
 		pushUndo({ type: "update_text", id: item.id, from: item.text, to: next });
