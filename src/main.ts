@@ -54,6 +54,7 @@ import {
 	nextNotchLoadedCount,
 	NOTCH_PAGE_SIZE,
 	notchShouldLoadMore,
+	openCommandPalette,
 	openItemContextMenu,
 	pointerOnScrollbar,
 	stepLoadedSelection,
@@ -2151,6 +2152,17 @@ document.addEventListener("keydown", async (e) => {
 		e.preventDefault();
 		if (e.shiftKey) await redo();
 		else await undo();
+		return;
+	}
+	if (modKey && e.key.toLowerCase() === "p" && selected >= 0 && filtered[selected]) {
+		e.preventDefault();
+		const item = filtered[selected]!;
+		openCommandPalette(
+			itemContextEntries(item, { inSelection: multiSelected.has(item.id), selectionCount: multiSelected.size }),
+			(id) => {
+				void runItemChromeAction(item, id);
+			},
+		);
 		return;
 	}
 	// `e.code` (physical key), not `e.key` — Shift+1 on a US layout reports

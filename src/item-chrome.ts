@@ -1,3 +1,4 @@
+import { fuzzyMatch } from "./capture-logic";
 import type { Item } from "./store";
 
 export function formatHeaderCount(n: number): string {
@@ -219,5 +220,131 @@ export function openItemContextMenu(event: MouseEvent, entries: ContextEntry[], 
 		window.addEventListener("pointerdown", dismiss, true);
 		window.addEventListener("keydown", onKey);
 		window.addEventListener("blur", dismiss);
+	});
+}
+
+let openPalette: HTMLElement | null = null;
+
+export function closeCommandPalette(): void {
+	openPalette?.remove();
+	openPalette = null;
+}
+
+/**
+ * ⌘P: the same actions `openItemContextMenu` offers, in a centered, typeahead-
+ * filterable list — a keyboard-first alternative to right-clicking a row.
+ */
+export function openCommandPalette(entries: ContextEntry[], onPick: (id: string) => void): void {
+	closeItemContextMenu();
+	closeCommandPalette();
+
+	const actions = entries.filter((entry): entry is Extract<ContextEntry, { type: "item" }> => entry.type === "item");
+	let shown = actions;
+	let activeIndex = 0;
+
+	const overlay = document.createElement("div");
+	overlay.className = "command-palette-overlay";
+	const palette = document.createElement("div");
+	palette.className = "command-palette";
+	palette.role = "menu";
+	overlay.appendChild(palette);
+
+	const search = document.createElement("input");
+	search.type = "text";
+	search.className = "command-palette-input";
+	search.placeholder = "Search actions…";
+	palette.appendChild(search);
+
+	const listEl = document.createElement("div");
+	listEl.className = "command-palette-list";
+	palette.appendChild(listEl);
+
+	const pick = (entry: Extract<ContextEntry, { type: "item" }>): void => {
+		close();
+		onPick(entry.id);
+	};
+
+	const renderList = (): void => {
+		listEl.innerHTML = "";
+		if (shown.length === 0) {
+			const empty = document.createElement("div");
+			empty.className = "command-palette-empty";
+			empty.textContent = "No matching actions.";
+			listEl.appendChild(empty);
+			return;
+		}
+		shown.forEach((entry, index) => {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "command-palette-item";
+			button.classList.toggle("active", index === activeIndex);
+			button.role = "menuitem";
+			const label = document.createElement("span");
+			label.textContent = entry.label;
+			button.appendChild(label);
+			if (entry.hint) {
+				const hint = document.createElement("span");
+				hint.className = "item-context-hint";
+				hint.textContent = entry.hint;
+				button.appendChild(hint);
+			}
+			button.onclick = (click) => {
+				click.stopPropagation();
+				pick(entry);
+			};
+			listEl.appendChild(button);
+		});
+	};
+
+	const filter = (): void => {
+		const query = search.value.trim();
+		shown = query
+			? actions
+					.map((entry) => ({ entry, match: fuzzyMatch(query, entry.label) }))
+					.filter((r): r is { entry: (typeof actions)[number]; match: NonNullable<ReturnType<typeof fuzzyMatch>> } => r.match !== null)
+					.sort((a, b) => b.match.score - a.match.score)
+					.map((r) => r.entry)
+			: actions;
+		activeIndex = 0;
+		renderList();
+	};
+
+	search.oninput = filter;
+	search.onkeydown = (e) => {
+		if (e.key === "ArrowDown") {
+			e.preventDefault();
+			activeIndex = Math.min(activeIndex + 1, shown.length - 1);
+			renderList();
+		} else if (e.key === "ArrowUp") {
+			e.preventDefault();
+			activeIndex = Math.max(activeIndex - 1, 0);
+			renderList();
+		} else if (e.key === "Enter") {
+			e.preventDefault();
+			const entry = shown[activeIndex];
+			if (entry) pick(entry);
+		} else if (e.key === "Escape") {
+			e.preventDefault();
+			close();
+		}
+	};
+
+	filter();
+	document.body.appendChild(overlay);
+	openPalette = overlay;
+	search.focus();
+
+	function close(): void {
+		closeCommandPalette();
+		window.removeEventListener("pointerdown", dismiss, true);
+		window.removeEventListener("blur", close);
+	}
+	const dismiss = (next: Event): void => {
+		if (next instanceof MouseEvent && palette.contains(next.target as Node)) return;
+		close();
+	};
+	queueMicrotask(() => {
+		window.addEventListener("pointerdown", dismiss, true);
+		window.addEventListener("blur", close);
 	});
 }
