@@ -26,6 +26,8 @@ pub use s3::S3Store;
 
 use serde::{Deserialize, Serialize};
 
+const MAX_TAG_LENGTH: usize = 64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ItemKind {
@@ -62,6 +64,10 @@ pub struct Item {
     pub id: String,
     pub kind: ItemKind,
     pub text: String,
+    /// Organization metadata, kept separate from the copyable text payload.
+    /// `default` keeps older SQLite/folder/S3 records readable.
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub done: bool,
     /// Sorts above everything else and is what the `@bookmarks` filter
     /// matches on (renamed from `pinned` — one flag, not two, matching how
@@ -81,6 +87,179 @@ pub struct Item {
     pub first_copied_at: Option<String>,
     #[serde(default)]
     pub last_copied_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectionField {
+    Tag,
+    Kind,
+    Done,
+    Bookmarked,
+    SourceApp,
+    Text,
+    CreatedAt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectionOperator {
+    Equals,
+    Contains,
+    Before,
+    After,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionPredicate {
+    pub field: CollectionField,
+    pub operator: CollectionOperator,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CollectionQuery {
+    /// Every predicate in this group must match.
+    pub all: Vec<CollectionPredicate>,
+    /// At least one predicate must match when this group is non-empty.
+    pub any: Vec<CollectionPredicate>,
+    /// No predicate in this group may match.
+    pub none: Vec<CollectionPredicate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Collection {
+    pub id: String,
+    pub name: String,
+    pub query: CollectionQuery,
+    pub sort: String,
+    pub rank: f64,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl Default for Collection {
+    fn default() -> Self {
+        let now = chrono::Utc::now().to_rfc3339();
+        Self {
+            id: String::new(),
+            name: String::new(),
+            query: CollectionQuery::default(),
+            sort: "manual".to_string(),
+            rank: 0.0,
+            icon: None,
+            color: None,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+}
+
+/// Normalizes one tag at the storage boundary so manual edits, automation,
+/// and imported records all use the same matching key.
+pub fn normalize_tag(raw: &str) -> Option<String> {
+    let mut normalized = String::new();
+    let mut separator = false;
+    for character in raw.trim().trim_start_matches('#').chars() {
+        if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
+            normalized.push(character.to_ascii_lowercase());
+            separator = false;
+        } else if character.is_whitespace() && !normalized.is_empty() && !separator {
+            normalized.push('-');
+            separator = true;
+        }
+    }
+    while normalized.ends_with('-') {
+        normalized.pop();
+    }
+    let first = normalized.chars().next()?;
+    if normalized.is_empty()
+        || normalized.len() > MAX_TAG_LENGTH
+        || !(first.is_ascii_alphabetic() || first == '_')
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
+pub fn normalize_tags(tags: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for raw in tags {
+        let Some(tag) = normalize_tag(raw) else {
+            continue;
+        };
+        if !normalized.iter().any(|existing| existing == &tag) {
+            normalized.push(tag);
+        }
+    }
+    normalized
+}
+
+/// Rejects malformed collection records before any backend writes them. The
+/// query is intentionally small and typed so no backend ever executes user
+/// supplied SQL or code.
+pub fn validate_collection(collection: &Collection) -> Result<(), String> {
+    if collection.id.trim().is_empty() {
+        return Err("collection id is required".to_string());
+    }
+    if collection.id.len() > 160 {
+        return Err("collection id is too long".to_string());
+    }
+    if !collection.id.bytes().all(|character| {
+        character.is_ascii_alphanumeric() || character == b'-' || character == b'_'
+    }) {
+        return Err(
+            "collection id may only contain letters, numbers, hyphens, and underscores".to_string(),
+        );
+    }
+    if collection.name.trim().is_empty() {
+        return Err("collection name is required".to_string());
+    }
+    if collection.name.len() > 200 {
+        return Err("collection name is too long".to_string());
+    }
+    if !matches!(
+        collection.sort.as_str(),
+        "manual" | "newest" | "oldest" | "az" | "za"
+    ) {
+        return Err(format!("unsupported collection sort: {}", collection.sort));
+    }
+    for predicate in collection
+        .query
+        .all
+        .iter()
+        .chain(collection.query.any.iter())
+        .chain(collection.query.none.iter())
+    {
+        let compatible = match predicate.field {
+            CollectionField::Tag
+            | CollectionField::Kind
+            | CollectionField::Done
+            | CollectionField::Bookmarked => predicate.operator == CollectionOperator::Equals,
+            CollectionField::SourceApp | CollectionField::Text => matches!(
+                predicate.operator,
+                CollectionOperator::Equals | CollectionOperator::Contains
+            ),
+            CollectionField::CreatedAt => matches!(
+                predicate.operator,
+                CollectionOperator::Before | CollectionOperator::After
+            ),
+        };
+        if !compatible {
+            return Err(format!(
+                "operator {:?} is not valid for field {:?}",
+                predicate.operator, predicate.field
+            ));
+        }
+        if predicate.value.len() > 1000 {
+            return Err("collection predicate value is too long".to_string());
+        }
+    }
+    Ok(())
 }
 
 /// Recomputes each item's copy-tracking fields (Raycard-style "times copied /
@@ -143,6 +322,9 @@ pub fn compute_move_rank(items: &[Item], id: &str, direction: MoveDirection) -> 
 /// from `Settings::backend`.
 pub trait Store: Send + Sync {
     fn list_items(&self) -> Result<Vec<Item>, String>;
+    fn list_collections(&self) -> Result<Vec<Collection>, String>;
+    fn save_collection(&self, collection: Collection) -> Result<(), String>;
+    fn delete_collection(&self, id: &str) -> Result<(), String>;
     fn add_item(
         &self,
         text: &str,
@@ -152,6 +334,7 @@ pub trait Store: Send + Sync {
     fn toggle_done(&self, id: &str) -> Result<(), String>;
     fn toggle_bookmarked(&self, id: &str) -> Result<(), String>;
     fn set_kind(&self, id: &str, kind: ItemKind) -> Result<(), String>;
+    fn set_tags(&self, id: &str, tags: Vec<String>) -> Result<(), String>;
     fn update_text(&self, id: &str, text: &str) -> Result<(), String>;
     fn delete_item(&self, id: &str) -> Result<(), String>;
     fn clear_completed(&self) -> Result<(), String>;
@@ -182,6 +365,7 @@ mod tests {
             id: id.to_string(),
             kind: ItemKind::Note,
             text: id.to_string(),
+            tags: Vec::new(),
             done: false,
             bookmarked: false,
             rank,
@@ -238,6 +422,46 @@ mod tests {
         );
         assert_eq!(items[1].copy_count, 0);
         assert_eq!(items[1].first_copied_at, None);
+    }
+
+    #[test]
+    fn normalizes_tags_and_deduplicates_them() {
+        let tags = vec![
+            "#Work Queue".to_string(),
+            "work-queue".to_string(),
+            "482".to_string(),
+            "_private".to_string(),
+        ];
+        assert_eq!(normalize_tags(&tags), vec!["work-queue", "_private"]);
+    }
+
+    #[test]
+    fn validates_collection_ids_and_query_operators() {
+        let mut collection = Collection {
+            id: "work_queue".to_string(),
+            name: "Work queue".to_string(),
+            query: CollectionQuery {
+                all: vec![CollectionPredicate {
+                    field: CollectionField::Tag,
+                    operator: CollectionOperator::Equals,
+                    value: "work".to_string(),
+                }],
+                ..CollectionQuery::default()
+            },
+            sort: "newest".to_string(),
+            rank: 1.0,
+            icon: None,
+            color: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        assert!(validate_collection(&collection).is_ok());
+
+        collection.id = "../escape".to_string();
+        assert!(validate_collection(&collection).is_err());
+        collection.id = "work_queue".to_string();
+        collection.query.all[0].operator = CollectionOperator::Contains;
+        assert!(validate_collection(&collection).is_err());
     }
 
     #[test]

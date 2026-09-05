@@ -1,3 +1,4 @@
+mod automation;
 mod capture;
 pub mod cli_protocol;
 mod cli_server;
@@ -77,8 +78,7 @@ pub fn run() {
             cli_server::start(handle.clone());
             clipboard_watch::start(handle.clone());
             tray::apply(&handle, show_tray_icon)?;
-            #[cfg(target_os = "macos")]
-            let _ = handle.set_dock_visibility(show_in_dock);
+            panel::apply_dock_visibility(&handle, show_in_dock);
 
             // Sync the OS-level login-item registration in case it drifted
             // (e.g. the setting was toggled, then the app was reinstalled).
@@ -113,10 +113,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_items,
+            commands::list_collections,
+            commands::save_collection,
+            commands::delete_collection,
             commands::add_item,
             commands::toggle_done,
             commands::toggle_bookmarked,
             commands::set_kind,
+            commands::set_item_tags,
             commands::update_item_text,
             commands::delete_item,
             commands::clear_completed,
@@ -130,6 +134,7 @@ pub fn run() {
             commands::capture_clipboard_image,
             commands::copy_image_to_clipboard,
             commands::fetch_link_preview,
+            commands::prepare_icloud_folder,
             commands::reveal_in_finder,
             commands::preview_file,
             commands::accessibility_trusted,
@@ -167,6 +172,7 @@ pub fn run() {
             commands::add_template,
             commands::update_template,
             commands::delete_template,
+            commands::replace_templates,
             commands::list_custom_themes,
             commands::add_custom_theme,
             commands::update_custom_theme,

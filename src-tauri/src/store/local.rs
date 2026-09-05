@@ -3,13 +3,14 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection};
 
-use super::{HistoryEntry, Item, ItemKind, MoveDirection, Store};
+use super::{Collection, CollectionQuery, HistoryEntry, Item, ItemKind, MoveDirection, Store};
 use crate::db_encryption::sql_quote;
 
 const SCHEMA_SQL: &str = "CREATE TABLE IF NOT EXISTS items (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
     text TEXT NOT NULL,
+    tags TEXT NOT NULL DEFAULT '[]',
     done INTEGER NOT NULL DEFAULT 0,
     bookmarked INTEGER NOT NULL DEFAULT 0,
     rank REAL NOT NULL DEFAULT 0,
@@ -22,6 +23,17 @@ CREATE TABLE IF NOT EXISTS history (
     action TEXT NOT NULL,
     detail TEXT,
     at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS collections (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    query TEXT NOT NULL,
+    sort TEXT NOT NULL DEFAULT 'manual',
+    rank REAL NOT NULL DEFAULT 0,
+    icon TEXT,
+    color TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );";
 
 pub struct LocalSqliteStore {
@@ -46,6 +58,7 @@ impl LocalSqliteStore {
         };
         conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
         Self::migrate_pinned_to_bookmarked(&conn)?;
+        Self::migrate_tags(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -152,8 +165,26 @@ impl LocalSqliteStore {
         Ok(())
     }
 
+    /// Adds first-class tag storage to databases created before collections.
+    /// Existing inline hashtag text remains readable and is treated as legacy
+    /// metadata by the frontend until it is edited into the new field.
+    fn migrate_tags(conn: &Connection) -> Result<(), String> {
+        let has_tags: bool = conn
+            .prepare("SELECT COUNT(*) FROM pragma_table_info('items') WHERE name = 'tags'")
+            .map_err(|e| e.to_string())?
+            .query_row([], |row| row.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?
+            > 0;
+        if !has_tags {
+            conn.execute_batch("ALTER TABLE items ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';")
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<Item> {
         let kind_str: String = row.get("kind")?;
+        let tags_json: Option<String> = row.get("tags")?;
         Ok(Item {
             id: row.get("id")?,
             kind: match kind_str.as_str() {
@@ -163,6 +194,9 @@ impl LocalSqliteStore {
                 _ => ItemKind::Note,
             },
             text: row.get("text")?,
+            tags: tags_json
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default(),
             done: row.get::<_, i64>("done")? != 0,
             bookmarked: row.get::<_, i64>("bookmarked")? != 0,
             rank: row.get("rank")?,
@@ -210,6 +244,70 @@ impl Store for LocalSqliteStore {
         Ok(items)
     }
 
+    fn list_collections(&self) -> Result<Vec<Collection>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT id, name, query, sort, rank, icon, color, created_at, updated_at FROM collections ORDER BY rank DESC, name COLLATE NOCASE ASC")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                let query_json: String = row.get("query")?;
+                let query: CollectionQuery =
+                    serde_json::from_str(&query_json).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            query_json.len(),
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?;
+                Ok(Collection {
+                    id: row.get("id")?,
+                    name: row.get("name")?,
+                    query,
+                    sort: row.get("sort")?,
+                    rank: row.get("rank")?,
+                    icon: row.get("icon")?,
+                    color: row.get("color")?,
+                    created_at: row.get("created_at")?,
+                    updated_at: row.get("updated_at")?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
+    fn save_collection(&self, collection: Collection) -> Result<(), String> {
+        super::validate_collection(&collection)?;
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let query = serde_json::to_string(&collection.query).map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO collections (id, name, query, sort, rank, icon, color, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                collection.id,
+                collection.name,
+                query,
+                collection.sort,
+                collection.rank,
+                collection.icon,
+                collection.color,
+                collection.created_at,
+                collection.updated_at,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn delete_collection(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM collections WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn add_item(
         &self,
         text: &str,
@@ -231,6 +329,7 @@ impl Store for LocalSqliteStore {
             id: uuid::Uuid::new_v4().to_string(),
             kind,
             text: text.to_string(),
+            tags: Vec::new(),
             done: false,
             bookmarked: false,
             rank: max_rank + 1000.0,
@@ -241,12 +340,13 @@ impl Store for LocalSqliteStore {
             last_copied_at: None,
         };
         conn.execute(
-            "INSERT INTO items (id, kind, text, done, bookmarked, rank, source_app, created_at)
-             VALUES (?1, ?2, ?3, 0, 0, ?4, ?5, ?6)",
+            "INSERT INTO items (id, kind, text, tags, done, bookmarked, rank, source_app, created_at)
+             VALUES (?1, ?2, ?3, ?4, 0, 0, ?5, ?6, ?7)",
             params![
                 item.id,
                 kind_str(item.kind),
                 item.text,
+                serde_json::to_string(&item.tags).map_err(|e| e.to_string())?,
                 item.rank,
                 item.source_app,
                 item.created_at,
@@ -281,6 +381,18 @@ impl Store for LocalSqliteStore {
         conn.execute(
             "UPDATE items SET kind = ?1 WHERE id = ?2",
             params![kind_str(kind), id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn set_tags(&self, id: &str, tags: Vec<String>) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let json =
+            serde_json::to_string(&super::normalize_tags(&tags)).map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE items SET tags = ?1 WHERE id = ?2",
+            params![json, id],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -327,12 +439,14 @@ impl Store for LocalSqliteStore {
     fn restore_item(&self, item: Item) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT OR REPLACE INTO items (id, kind, text, done, bookmarked, rank, source_app, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT OR REPLACE INTO items (id, kind, text, tags, done, bookmarked, rank, source_app, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 item.id,
                 kind_str(item.kind),
                 item.text,
+                serde_json::to_string(&super::normalize_tags(&item.tags))
+                    .map_err(|e| e.to_string())?,
                 item.done as i64,
                 item.bookmarked as i64,
                 item.rank,
@@ -442,6 +556,43 @@ mod tests {
         let item = s.add_item("call mom", ItemKind::Note, None).unwrap();
         s.set_kind(&item.id, ItemKind::Todo).unwrap();
         assert_eq!(s.list_items().unwrap()[0].kind, ItemKind::Todo);
+    }
+
+    #[test]
+    fn tags_and_collections_round_trip() {
+        let s = store();
+        let item = s
+            .add_item("send report", ItemKind::Todo, Some("Mail".into()))
+            .unwrap();
+        s.set_tags(
+            &item.id,
+            vec!["#Work Queue".into(), "work-queue".into(), "482".into()],
+        )
+        .unwrap();
+        assert_eq!(s.list_items().unwrap()[0].tags, vec!["work-queue"]);
+
+        let collection = Collection {
+            id: "work".into(),
+            name: "Work queue".into(),
+            query: CollectionQuery {
+                all: vec![super::super::CollectionPredicate {
+                    field: super::super::CollectionField::Tag,
+                    operator: super::super::CollectionOperator::Equals,
+                    value: "work-queue".into(),
+                }],
+                ..CollectionQuery::default()
+            },
+            sort: "newest".into(),
+            rank: 10.0,
+            icon: Some("▣".into()),
+            color: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+        s.save_collection(collection.clone()).unwrap();
+        assert_eq!(s.list_collections().unwrap(), vec![collection]);
+        s.delete_collection("work").unwrap();
+        assert!(s.list_collections().unwrap().is_empty());
     }
 
     #[test]

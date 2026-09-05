@@ -22,7 +22,7 @@ use s3::bucket::Bucket;
 use s3::creds::Credentials;
 use s3::region::Region;
 
-use super::{compute_move_rank, HistoryEntry, Item, ItemKind, MoveDirection, Store};
+use super::{compute_move_rank, Collection, HistoryEntry, Item, ItemKind, MoveDirection, Store};
 use crate::settings::S3Settings;
 
 pub struct S3Store {
@@ -67,6 +67,10 @@ impl S3Store {
         format!("{}history/{}.json", self.prefix, id)
     }
 
+    fn collection_key(&self, id: &str) -> String {
+        format!("{}collections/{}.json", self.prefix, id)
+    }
+
     fn get_item(&self, id: &str) -> Result<Item, String> {
         let response = self
             .bucket
@@ -79,6 +83,22 @@ impl S3Store {
         let bytes = serde_json::to_vec(item).map_err(|e| e.to_string())?;
         self.bucket
             .put_object(self.item_key(&item.id), &bytes)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn get_collection(&self, id: &str) -> Result<Collection, String> {
+        let response = self
+            .bucket
+            .get_object(self.collection_key(id))
+            .map_err(|e| e.to_string())?;
+        serde_json::from_slice(response.as_slice()).map_err(|e| e.to_string())
+    }
+
+    fn put_collection(&self, collection: &Collection) -> Result<(), String> {
+        let bytes = serde_json::to_vec(collection).map_err(|e| e.to_string())?;
+        self.bucket
+            .put_object(self.collection_key(&collection.id), &bytes)
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -114,6 +134,47 @@ impl Store for S3Store {
         Ok(items)
     }
 
+    fn list_collections(&self) -> Result<Vec<Collection>, String> {
+        let pages = self
+            .bucket
+            .list(format!("{}collections/", self.prefix), None)
+            .map_err(|e| e.to_string())?;
+        let mut collections = Vec::new();
+        for page in pages {
+            for object in page.contents {
+                let Some(id) = object
+                    .key
+                    .strip_prefix(&format!("{}collections/", self.prefix))
+                    .and_then(|key| key.strip_suffix(".json"))
+                else {
+                    continue;
+                };
+                if id.is_empty() || id.contains('/') {
+                    continue;
+                }
+                collections.push(self.get_collection(id)?);
+            }
+        }
+        collections.sort_by(|a, b| {
+            b.rank
+                .total_cmp(&a.rank)
+                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(collections)
+    }
+
+    fn save_collection(&self, collection: Collection) -> Result<(), String> {
+        super::validate_collection(&collection)?;
+        self.put_collection(&collection)
+    }
+
+    fn delete_collection(&self, id: &str) -> Result<(), String> {
+        self.bucket
+            .delete_object(self.collection_key(id))
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn add_item(
         &self,
         text: &str,
@@ -129,6 +190,7 @@ impl Store for S3Store {
             id: uuid::Uuid::new_v4().to_string(),
             kind,
             text: text.to_string(),
+            tags: Vec::new(),
             done: false,
             bookmarked: false,
             rank: max_rank + 1000.0,
@@ -157,6 +219,12 @@ impl Store for S3Store {
     fn set_kind(&self, id: &str, kind: ItemKind) -> Result<(), String> {
         let mut item = self.get_item(id)?;
         item.kind = kind;
+        self.put_item(&item)
+    }
+
+    fn set_tags(&self, id: &str, tags: Vec<String>) -> Result<(), String> {
+        let mut item = self.get_item(id)?;
+        item.tags = super::normalize_tags(&tags);
         self.put_item(&item)
     }
 

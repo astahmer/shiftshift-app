@@ -43,6 +43,7 @@ mod tests {
             id: "id".into(),
             kind,
             text: text.into(),
+            tags: Vec::new(),
             done,
             bookmarked: false,
             rank: 0.0,

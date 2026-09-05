@@ -15,12 +15,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{
-    apply_copy_stats, compute_move_rank, HistoryEntry, Item, ItemKind, MoveDirection, Store,
+    apply_copy_stats, compute_move_rank, Collection, HistoryEntry, Item, ItemKind, MoveDirection,
+    Store,
 };
 
 pub struct FolderStore {
     items_dir: PathBuf,
     history_dir: PathBuf,
+    collections_dir: PathBuf,
 }
 
 /// `Path` doesn't expand `~` itself — users will naturally type a `~/...`
@@ -36,19 +38,36 @@ fn expand_tilde(path: &str) -> String {
 }
 
 impl FolderStore {
-    pub fn open(folder_path: &str) -> Result<Self, String> {
+    fn root_for(folder_path: &str) -> Result<PathBuf, String> {
         if folder_path.trim().is_empty() {
             return Err("folder backend needs a directory path".to_string());
         }
-        let expanded = expand_tilde(folder_path);
-        let root = Path::new(&expanded);
-        let items_dir = root.join("items");
-        let history_dir = root.join("history");
-        fs::create_dir_all(&items_dir).map_err(|e| e.to_string())?;
-        fs::create_dir_all(&history_dir).map_err(|e| e.to_string())?;
+        Ok(PathBuf::from(expand_tilde(folder_path)))
+    }
+
+    fn ensure_layout(root: &Path) -> Result<(), String> {
+        fs::create_dir_all(root.join("items")).map_err(|e| e.to_string())?;
+        fs::create_dir_all(root.join("history")).map_err(|e| e.to_string())?;
+        fs::create_dir_all(root.join("collections")).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Creates the folder layout without switching the active backend. This
+    /// lets the settings UI prove that setup succeeded before the required
+    /// restart constructs the live `FolderStore`.
+    pub fn prepare(folder_path: &str) -> Result<String, String> {
+        let root = Self::root_for(folder_path)?;
+        Self::ensure_layout(&root)?;
+        Ok(root.to_string_lossy().into_owned())
+    }
+
+    pub fn open(folder_path: &str) -> Result<Self, String> {
+        let root = Self::root_for(folder_path)?;
+        Self::ensure_layout(&root)?;
         Ok(Self {
-            items_dir,
-            history_dir,
+            items_dir: root.join("items"),
+            history_dir: root.join("history"),
+            collections_dir: root.join("collections"),
         })
     }
 
@@ -58,6 +77,10 @@ impl FolderStore {
 
     fn history_path(&self, id: &str) -> PathBuf {
         self.history_dir.join(format!("{id}.json"))
+    }
+
+    fn collection_path(&self, id: &str) -> PathBuf {
+        self.collections_dir.join(format!("{id}.json"))
     }
 
     fn read_item(&self, id: &str) -> Result<Item, String> {
@@ -95,6 +118,29 @@ impl FolderStore {
         }
         Ok(entries)
     }
+
+    fn read_all_collections(&self) -> Result<Vec<Collection>, String> {
+        let mut collections = Vec::new();
+        for entry in fs::read_dir(&self.collections_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let raw = fs::read_to_string(entry.path()).map_err(|e| e.to_string())?;
+            collections.push(serde_json::from_str::<Collection>(&raw).map_err(|e| e.to_string())?);
+        }
+        collections.sort_by(|a, b| {
+            b.rank
+                .total_cmp(&a.rank)
+                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(collections)
+    }
+
+    fn write_collection(&self, collection: &Collection) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(collection).map_err(|e| e.to_string())?;
+        fs::write(self.collection_path(&collection.id), json).map_err(|e| e.to_string())
+    }
 }
 
 impl Store for FolderStore {
@@ -109,6 +155,19 @@ impl Store for FolderStore {
         let history = self.read_all_history()?;
         apply_copy_stats(&mut items, &history);
         Ok(items)
+    }
+
+    fn list_collections(&self) -> Result<Vec<Collection>, String> {
+        self.read_all_collections()
+    }
+
+    fn save_collection(&self, collection: Collection) -> Result<(), String> {
+        super::validate_collection(&collection)?;
+        self.write_collection(&collection)
+    }
+
+    fn delete_collection(&self, id: &str) -> Result<(), String> {
+        fs::remove_file(self.collection_path(id)).map_err(|e| e.to_string())
     }
 
     fn add_item(
@@ -126,6 +185,7 @@ impl Store for FolderStore {
             id: uuid::Uuid::new_v4().to_string(),
             kind,
             text: text.to_string(),
+            tags: Vec::new(),
             done: false,
             bookmarked: false,
             rank: max_rank + 1000.0,
@@ -154,6 +214,12 @@ impl Store for FolderStore {
     fn set_kind(&self, id: &str, kind: ItemKind) -> Result<(), String> {
         let mut item = self.read_item(id)?;
         item.kind = kind;
+        self.write_item(&item)
+    }
+
+    fn set_tags(&self, id: &str, tags: Vec<String>) -> Result<(), String> {
+        let mut item = self.read_item(id)?;
+        item.tags = super::normalize_tags(&tags);
         self.write_item(&item)
     }
 
@@ -250,6 +316,16 @@ mod tests {
     }
 
     #[test]
+    fn prepare_creates_the_folder_layout_and_returns_the_expanded_path() {
+        let root =
+            std::env::temp_dir().join(format!("shiftshift-prepare-test-{}", uuid::Uuid::new_v4()));
+        let prepared = FolderStore::prepare(root.to_str().unwrap()).unwrap();
+        assert_eq!(prepared, root.to_string_lossy());
+        assert!(root.join("items").is_dir());
+        assert!(root.join("history").is_dir());
+    }
+
+    #[test]
     fn add_and_list_returns_the_item() {
         let s = store();
         let added = s.add_item("buy milk", ItemKind::Todo, None).unwrap();
@@ -257,6 +333,31 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, added.id);
         assert_eq!(items[0].text, "buy milk");
+    }
+
+    #[test]
+    fn tags_and_collections_round_trip() {
+        let s = store();
+        let item = s.add_item("send report", ItemKind::Todo, None).unwrap();
+        s.set_tags(&item.id, vec!["#Work Queue".into(), "work-queue".into()])
+            .unwrap();
+        assert_eq!(s.list_items().unwrap()[0].tags, vec!["work-queue"]);
+
+        let collection = Collection {
+            id: "work".into(),
+            name: "Work queue".into(),
+            query: Default::default(),
+            sort: "manual".into(),
+            rank: 10.0,
+            icon: None,
+            color: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+        s.save_collection(collection.clone()).unwrap();
+        assert_eq!(s.list_collections().unwrap(), vec![collection]);
+        s.delete_collection("work").unwrap();
+        assert!(s.list_collections().unwrap().is_empty());
     }
 
     #[test]

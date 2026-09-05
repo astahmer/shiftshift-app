@@ -470,6 +470,11 @@ pub(crate) fn handle_captured_text(
     let _ = app.emit("refresh", ());
     let _ = app.emit("captured", ());
     crate::notify::notify_captured(app, &item);
+    crate::automation::dispatch(
+        app,
+        crate::settings::AutomationEvent::ItemCreated,
+        Some(item),
+    );
     if mode == CaptureMode::Open {
         panel::show(app);
     }

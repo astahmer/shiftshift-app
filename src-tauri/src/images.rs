@@ -102,5 +102,10 @@ pub fn capture_clipboard_image(app: &AppHandle) -> Result<Item, String> {
     let _ = db.store.log_event(Some(&item.id), "created", Some("image"));
     let _ = app.emit("refresh", ());
     crate::notify::notify_captured(app, &item);
+    crate::automation::dispatch(
+        app,
+        crate::settings::AutomationEvent::ItemCreated,
+        Some(item.clone()),
+    );
     Ok(item)
 }

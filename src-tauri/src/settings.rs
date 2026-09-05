@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::capture::{Bindings, CaptureMode};
+use crate::store::CollectionQuery;
 
 const FILE_NAME: &str = "settings.json";
 
@@ -90,6 +91,119 @@ pub enum HighlightSubmit {
     CopyHide,
     #[default]
     CopyHideWrite,
+}
+
+/// Lifecycle points at which an external automation command may run. The
+/// dotted wire names are stable protocol values, not Rust implementation
+/// names, so a hook can be written in any language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutomationEvent {
+    #[serde(rename = "item.created")]
+    ItemCreated,
+    #[serde(rename = "item.updated")]
+    ItemUpdated,
+    #[serde(rename = "item.used")]
+    ItemUsed,
+    #[serde(rename = "item.bookmarked")]
+    ItemBookmarked,
+    #[serde(rename = "item.deleted")]
+    ItemDeleted,
+}
+
+impl AutomationEvent {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ItemCreated => "item.created",
+            Self::ItemUpdated => "item.updated",
+            Self::ItemUsed => "item.used",
+            Self::ItemBookmarked => "item.bookmarked",
+            Self::ItemDeleted => "item.deleted",
+        }
+    }
+}
+
+fn default_automation_hook_enabled() -> bool {
+    true
+}
+
+fn default_automation_hook_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_automation_view_enabled() -> bool {
+    true
+}
+
+fn default_automation_view_sort() -> String {
+    "manual".to_string()
+}
+
+/// A read-only smart view contributed by an automation/plugin. The hook owns
+/// the definition, while the user owns the `enabled` switch in Settings.
+/// Prefixing its tab id with the hook id keeps two plugins free to use the
+/// same local view id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutomationView {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub icon: String,
+    pub query: CollectionQuery,
+    #[serde(default = "default_automation_view_sort")]
+    pub sort: String,
+    #[serde(default = "default_automation_view_enabled")]
+    pub enabled: bool,
+}
+
+impl Default for AutomationView {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: String::new(),
+            description: String::new(),
+            icon: String::new(),
+            query: CollectionQuery::default(),
+            sort: default_automation_view_sort(),
+            enabled: true,
+        }
+    }
+}
+
+/// A direct executable invocation. The app never passes this through a shell:
+/// `command` is the executable and `args` are passed as individual arguments.
+/// Keeping this in Settings makes hooks portable through config export/import;
+/// credentials remain the hook's responsibility and are never part of this
+/// object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutomationHook {
+    pub id: String,
+    #[serde(default = "default_automation_hook_enabled")]
+    pub enabled: bool,
+    pub events: Vec<AutomationEvent>,
+    pub command: String,
+    pub args: Vec<String>,
+    #[serde(default = "default_automation_hook_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Smart views contributed by this hook/plugin. They are configuration,
+    /// not executable output, so they remain stable between item events.
+    #[serde(default)]
+    pub views: Vec<AutomationView>,
+}
+
+impl Default for AutomationHook {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            enabled: true,
+            events: Vec::new(),
+            command: String::new(),
+            args: Vec::new(),
+            timeout_ms: default_automation_hook_timeout_ms(),
+            views: Vec::new(),
+        }
+    }
 }
 
 /// `secret_access_key` is write-only over the wire — see `commands::set_settings`,
@@ -175,6 +289,10 @@ pub struct Settings {
     /// Auto-capture everything copied to the system clipboard, own writes
     /// excluded (shiftshift's clipboard-watch).
     pub clipboard_watch: bool,
+    /// One list-tab per distinct #tag (the default) vs. a single combined
+    /// "Tags" tab with its own multi-select filter (`capture-logic.ts`'s
+    /// `buildListTabs`).
+    pub separate_tag_tabs: bool,
     pub launch_at_login: bool,
     /// "local" or "s3" — which `Store` backend `Db::open` constructs.
     /// Switching requires a restart (no live backend hot-swap).
@@ -185,6 +303,9 @@ pub struct Settings {
     /// since the canonical DB order already IS "manual" (rank-based).
     /// "manual" | "newest" | "oldest" | "az" | "za".
     pub sort_mode: String,
+    /// Direct external commands invoked asynchronously after matching item
+    /// lifecycle events. See `automation.rs` and AUTOMATIONS.md.
+    pub automation_hooks: Vec<AutomationHook>,
     /// Both default to `false` — this app is meant to be invoked purely via
     /// the double-shift gesture / fallback shortcuts, so "no dock icon, no
     /// menu-bar icon" is the intended steady state, not an oversight.
@@ -272,10 +393,12 @@ impl Default for Settings {
             hide_on_blur: true,
             input_spellcheck: false,
             clipboard_watch: false,
+            separate_tag_tabs: true,
             launch_at_login: false,
             backend: "local".to_string(),
             s3: S3Settings::default(),
             sort_mode: "manual".to_string(),
+            automation_hooks: Vec::new(),
             show_in_dock: false,
             show_tray_icon: false,
             folder_path: String::new(),

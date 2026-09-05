@@ -1,4 +1,6 @@
 use std::sync::Mutex;
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 
@@ -14,6 +16,32 @@ const PANEL_LABEL: &str = "panel";
 /// hidden or a second toggle-to-close doesn't clobber it with shiftshift
 /// itself (which would be the frontmost app by the time that runs).
 static LAST_FRONTMOST: Mutex<Option<String>> = Mutex::new(None);
+
+/// Applies the user's Dock preference while accounting for macOS's
+/// asynchronous process-type transition. Tao ignores a hide requested within
+/// roughly one second of a show, so delayed hides are required after the
+/// temporary regular-policy activation used by `activate_and_show`.
+pub fn apply_dock_visibility(app: &AppHandle, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        if visible {
+            let _ = app.set_dock_visibility(true);
+            return;
+        }
+
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1_100));
+            let show_in_dock = app.state::<SettingsState>().0.lock().unwrap().show_in_dock;
+            if !show_in_dock {
+                let _ = app.set_dock_visibility(false);
+            }
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, visible);
+}
 
 pub fn toggle(app: &AppHandle) {
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
@@ -47,9 +75,8 @@ pub fn show(app: &AppHandle) {
 /// (the panel would visibly appear yet the previously frontmost app kept
 /// receiving keystrokes). The fix every Spotlight-alternative launcher
 /// uses: flip to a regular activation policy just long enough to activate,
-/// then flip back — the activation itself sticks even after reverting, so
-/// the Dock icon only exists for the duration of one synchronous call and
-/// the "no Dock icon" preference (whatever it actually is) is preserved.
+/// then restore the user's preference after macOS's process-type transition
+/// is allowed to settle.
 ///
 /// Don't "simplify" this to a bare `activate_app()`. That was re-measured
 /// after the Input Monitoring and code-signing fixes landed, in case the
@@ -58,11 +85,13 @@ pub fn show(app: &AppHandle) {
 /// receiving the typed characters), against 3 of 3 with it.
 fn activate_and_show(app: &AppHandle, window: &WebviewWindow) {
     let restore_to = app.state::<SettingsState>().0.lock().unwrap().show_in_dock;
-    let _ = app.set_dock_visibility(true);
+    apply_dock_visibility(app, true);
     activate_app();
     let _ = window.show();
     let _ = window.set_focus();
-    let _ = app.set_dock_visibility(restore_to);
+    if !restore_to {
+        apply_dock_visibility(app, false);
+    }
 }
 
 /// The actual macOS app-level activation — see `activate_and_show` for why

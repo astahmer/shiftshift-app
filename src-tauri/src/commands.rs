@@ -6,12 +6,36 @@ use crate::custom_themes::{self, CustomTheme, CustomThemesState, ThemeColors};
 use crate::db::Db;
 use crate::export;
 use crate::settings::{self, Settings, SettingsState, ToastPosition};
-use crate::store::{HistoryEntry, Item, ItemKind, MoveDirection};
+use crate::store::{Collection, FolderStore, HistoryEntry, Item, ItemKind, MoveDirection};
 use crate::templates::{self, Template, TemplatesState};
 
 #[tauri::command]
 pub fn list_items(db: State<Db>) -> Result<Vec<Item>, String> {
     db.store.list_items()
+}
+
+#[tauri::command]
+pub fn list_collections(db: State<Db>) -> Result<Vec<Collection>, String> {
+    db.store.list_collections()
+}
+
+#[tauri::command]
+pub fn save_collection(
+    db: State<Db>,
+    app: AppHandle,
+    collection: Collection,
+) -> Result<(), String> {
+    crate::store::validate_collection(&collection)?;
+    db.store.save_collection(collection)?;
+    let _ = app.emit("refresh", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_collection(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
+    db.store.delete_collection(&id)?;
+    let _ = app.emit("refresh", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -27,6 +51,11 @@ pub fn add_item(
         .log_event(Some(&item.id), "created", Some(&item.text));
     let _ = app.emit("refresh", ());
     crate::notify::notify_captured(&app, &item);
+    crate::automation::dispatch(
+        &app,
+        crate::settings::AutomationEvent::ItemCreated,
+        Some(item.clone()),
+    );
     Ok(item)
 }
 
@@ -35,6 +64,11 @@ pub fn toggle_done(db: State<Db>, app: AppHandle, id: String) -> Result<(), Stri
     db.store.toggle_done(&id)?;
     let _ = db.store.log_event(Some(&id), "toggled_done", None);
     let _ = app.emit("refresh", ());
+    crate::automation::dispatch_current_item(
+        &app,
+        crate::settings::AutomationEvent::ItemUpdated,
+        &id,
+    );
     Ok(())
 }
 
@@ -43,6 +77,11 @@ pub fn toggle_bookmarked(db: State<Db>, app: AppHandle, id: String) -> Result<()
     db.store.toggle_bookmarked(&id)?;
     let _ = db.store.log_event(Some(&id), "toggled_bookmark", None);
     let _ = app.emit("refresh", ());
+    crate::automation::dispatch_current_item(
+        &app,
+        crate::settings::AutomationEvent::ItemBookmarked,
+        &id,
+    );
     Ok(())
 }
 
@@ -53,6 +92,31 @@ pub fn set_kind(db: State<Db>, app: AppHandle, id: String, kind: ItemKind) -> Re
         .store
         .log_event(Some(&id), "kind_changed", Some(&format!("{kind:?}")));
     let _ = app.emit("refresh", ());
+    crate::automation::dispatch_current_item(
+        &app,
+        crate::settings::AutomationEvent::ItemUpdated,
+        &id,
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_item_tags(
+    db: State<Db>,
+    app: AppHandle,
+    id: String,
+    tags: Vec<String>,
+) -> Result<(), String> {
+    db.store.set_tags(&id, tags.clone())?;
+    let detail =
+        serde_json::to_string(&crate::store::normalize_tags(&tags)).map_err(|e| e.to_string())?;
+    let _ = db.store.log_event(Some(&id), "tags_changed", Some(&detail));
+    let _ = app.emit("refresh", ());
+    crate::automation::dispatch_current_item(
+        &app,
+        crate::settings::AutomationEvent::ItemUpdated,
+        &id,
+    );
     Ok(())
 }
 
@@ -66,27 +130,50 @@ pub fn update_item_text(
     db.store.update_text(&id, &text)?;
     let _ = db.store.log_event(Some(&id), "edited", Some(&text));
     let _ = app.emit("refresh", ());
+    crate::automation::dispatch_current_item(
+        &app,
+        crate::settings::AutomationEvent::ItemUpdated,
+        &id,
+    );
     Ok(())
 }
 
 #[tauri::command]
 pub fn delete_item(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    let detail = db
+    let deleted_item = db
         .store
         .list_items()
         .ok()
-        .and_then(|items| items.into_iter().find(|i| i.id == id))
-        .map(|i| i.text);
+        .and_then(|items| items.into_iter().find(|i| i.id == id));
+    let detail = deleted_item.as_ref().map(|item| item.text.as_str());
     db.store.delete_item(&id)?;
-    let _ = db.store.log_event(Some(&id), "deleted", detail.as_deref());
+    let _ = db.store.log_event(Some(&id), "deleted", detail);
     let _ = app.emit("refresh", ());
+    crate::automation::dispatch(
+        &app,
+        crate::settings::AutomationEvent::ItemDeleted,
+        deleted_item,
+    );
     Ok(())
 }
 
 #[tauri::command]
 pub fn clear_completed(db: State<Db>, app: AppHandle) -> Result<(), String> {
+    let deleted = db
+        .store
+        .list_items()?
+        .into_iter()
+        .filter(|item| item.done)
+        .collect::<Vec<_>>();
     db.store.clear_completed()?;
     let _ = app.emit("refresh", ());
+    for item in deleted {
+        crate::automation::dispatch(
+            &app,
+            crate::settings::AutomationEvent::ItemDeleted,
+            Some(item),
+        );
+    }
     Ok(())
 }
 
@@ -99,6 +186,11 @@ pub fn move_item(
 ) -> Result<(), String> {
     db.store.move_item(&id, direction)?;
     let _ = app.emit("refresh", ());
+    crate::automation::dispatch_current_item(
+        &app,
+        crate::settings::AutomationEvent::ItemUpdated,
+        &id,
+    );
     Ok(())
 }
 
@@ -112,6 +204,11 @@ pub fn restore_item(db: State<Db>, app: AppHandle, item: Item) -> Result<(), Str
         .store
         .log_event(Some(&item.id), "restored", Some(&item.text));
     let _ = app.emit("refresh", ());
+    crate::automation::dispatch_current_item(
+        &app,
+        crate::settings::AutomationEvent::ItemUpdated,
+        &item.id,
+    );
     Ok(())
 }
 
@@ -121,6 +218,11 @@ pub fn restore_item(db: State<Db>, app: AppHandle, item: Item) -> Result<(), Str
 pub fn set_rank(db: State<Db>, app: AppHandle, id: String, rank: f64) -> Result<(), String> {
     db.store.set_rank(&id, rank)?;
     let _ = app.emit("refresh", ());
+    crate::automation::dispatch_current_item(
+        &app,
+        crate::settings::AutomationEvent::ItemUpdated,
+        &id,
+    );
     Ok(())
 }
 
@@ -150,8 +252,14 @@ pub fn list_history(db: State<Db>, limit: u32) -> Result<Vec<HistoryEntry>, Stri
 /// Called by the frontend right after copying/opening a selected row, purely
 /// to record it in history — not a mutation, so no "refresh" event.
 #[tauri::command]
-pub fn log_used(db: State<Db>, id: String) -> Result<(), String> {
-    db.store.log_event(Some(&id), "used", None)
+pub fn log_used(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
+    db.store.log_event(Some(&id), "used", None)?;
+    // Usage is an event in its own right, so a hook can build analytics or a
+    // recency-based organizer without making capture/copy code provider-aware.
+    // The item may have been deleted between the UI read and this call; in
+    // that case there is simply no item payload to send.
+    crate::automation::dispatch_current_item(&app, crate::settings::AutomationEvent::ItemUsed, &id);
+    Ok(())
 }
 
 /// Called by the frontend right after it writes to the system clipboard
@@ -175,6 +283,35 @@ pub fn copy_image_to_clipboard(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn fetch_link_preview(url: String) -> Result<crate::link_preview::LinkPreview, String> {
     crate::link_preview::fetch(&url)
+}
+
+/// Creates the app-owned folder inside the user's iCloud Drive. The folder
+/// backend is still selected on the next launch, but setup itself should be
+/// visible immediately rather than relying on a future restart to create it.
+#[tauri::command]
+pub fn prepare_icloud_folder() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| "Could not determine your home folder".to_string())?;
+        let cloud_root = std::path::PathBuf::from(home)
+            .join("Library")
+            .join("Mobile Documents")
+            .join("com~apple~CloudDocs");
+        if !cloud_root.is_dir() {
+            return Err(format!(
+                "iCloud Drive is not available at {}. Turn on iCloud Drive in System Settings and try again.",
+                cloud_root.display()
+            ));
+        }
+        let folder = cloud_root.join("shiftshift");
+        return FolderStore::prepare(&folder.to_string_lossy());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("iCloud Drive setup is only available on macOS".to_string())
+    }
 }
 
 /// Reveals a file in Finder so its native Share button (AirDrop, Mail,
@@ -469,6 +606,7 @@ pub fn set_settings(
     mut next: Settings,
 ) -> Result<(), String> {
     let previous = settings.0.lock().unwrap().clone();
+    let show_in_dock_changed = next.show_in_dock != previous.show_in_dock;
     // Write-only field — see `S3Settings`'s doc comment. Non-empty means
     // "the user just typed a new one," goes to the keychain and never
     // touches `Settings` (in memory or on disk) past this point; empty
@@ -503,12 +641,6 @@ pub fn set_settings(
         };
         if let Err(e) = result {
             eprintln!("shiftshift: could not update login-item registration: {e}");
-        }
-    }
-    if next.show_in_dock != previous.show_in_dock {
-        #[cfg(target_os = "macos")]
-        if let Err(e) = app.set_dock_visibility(next.show_in_dock) {
-            eprintln!("shiftshift: could not update Dock visibility: {e}");
         }
     }
     if next.show_tray_icon != previous.show_tray_icon {
@@ -556,6 +688,10 @@ pub fn set_settings(
     settings::save(&app_data_dir, &next)?;
     let dock_enabled = next.dock_enabled;
     *settings.0.lock().unwrap() = next;
+    if show_in_dock_changed {
+        let show_in_dock = settings.0.lock().unwrap().show_in_dock;
+        crate::panel::apply_dock_visibility(&app, show_in_dock);
+    }
     // After the state update — `dock::apply_enabled`/`set_expanded` read
     // `dock_position`/custom coords back out of `SettingsState` to
     // (re)position the window.
@@ -678,6 +814,17 @@ pub fn delete_template(
     let mut list = templates.0.lock().unwrap();
     list.retain(|t| t.id != id);
     persist_templates(&app, &list)
+}
+
+#[tauri::command]
+pub fn replace_templates(
+    templates: State<TemplatesState>,
+    app: AppHandle,
+    next: Vec<Template>,
+) -> Result<(), String> {
+    persist_templates(&app, &next)?;
+    *templates.0.lock().unwrap() = next;
+    Ok(())
 }
 
 fn persist_templates(app: &AppHandle, templates: &[Template]) -> Result<(), String> {
