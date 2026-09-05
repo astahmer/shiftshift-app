@@ -111,9 +111,9 @@ work.
 ## Features
 
 - **Settings** (gear icon in the panel): theme, capture behavior, double-shift
-  bindings, fallback shortcuts, notifications, sync backend, snippet
-  templates, Markdown export, history. All persist to `settings.json` and
-  apply live, no restart needed (except the sync backend choice).
+	bindings, fallback shortcuts, notifications, sync backend, snippet
+	templates, automations, Markdown export, history. All persist to `settings.json` and
+	apply live, no restart needed (except the sync backend choice).
 - **Themes**: 39 built-in presets (Tokyo Night, Dracula, Nord, Catppuccin,
   Gruvbox, Rosé Pine, Solarized, GitHub, VS Code, One Dark — each with a
   light/dark sibling — plus Glass, Neobrutalism, Paper, Windows 95 / Vista /
@@ -149,8 +149,9 @@ work.
   `#` suggests hashtags already in use across your items (both: `Tab` or
   `Enter` on a highlighted one completes it) — `#hashtags` anywhere in an
   item's text also render as a small pill in the row.
-  `↑`/`↓` selects a row, `Enter` copies note/todo text (or opens a link, or
-  copies an image back to the clipboard) and closes the panel; `⌘C` does the
+	`↑`/`↓` selects a row, `Enter` copies note/todo text (rendered `#tags` are
+	omitted from the copied payload; or it opens a link, or
+	copies an image back to the clipboard) and closes the panel; `⌘C` does the
   same but leaves the panel open. `⌘Enter` force-saves the typed text as a
   new item and stays open without touching the clipboard. `⇧Enter` force-saves,
   copies the new text, and stays open. `Tab` completes the highlighted item
@@ -165,8 +166,9 @@ work.
   whatever else ends up under the cursor after each step), `⌘Backspace`/
   `⌘Delete` (input empty) deletes — the bare key without `⌘` no longer does,
   so a stray Delete/Backspace while just browsing can't wipe a row by
-  accident. `Shift+→` opens a full detail view for the selected row (complete
-  untruncated text, all dates, copy count, action buttons) — `Shift+←` or
+  accident. The row's Preview action, right-click → Preview, and `⌘P` → Preview
+  open a full detail view (the same view as `Shift+→`) with complete
+  untruncated text, all dates, copy count, and action buttons — `Shift+←` or
   `Escape` goes back. `⌘Z`/`⌘⇧Z` undoes/redoes the last mutation made
   through this UI (add, delete, edit, bookmark, todo-convert, reorder) —
   session-scoped, not persisted across restarts. `Escape` reverts an
@@ -215,7 +217,11 @@ work.
   templates from Settings; typing `/` shows matching commands and templates
   as you type, `Tab` autocompletes the highlighted one — and (unlike before)
   `Enter` on a still-partial command completes it too instead of saving the
-  partial text as a literal note.
+	partial text as a literal note.
+- **Automations**: Settings → Automations runs configured executables after
+	item lifecycle events. Each hook receives the item as JSON and can return
+	automatic kind, todo/bookmark, or inline-tag actions; see
+	[`AUTOMATIONS.md`](AUTOMATIONS.md) for the protocol and a minimal example.
 - **Inline Markdown in the list**: `**bold**`, `*italic*`, and `` `code` ``
   render as such within a row's text (`capture-logic.ts`'s
   `parseInlineMarkdown` — inline-only, no blocks/links/nesting, just enough

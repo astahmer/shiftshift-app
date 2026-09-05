@@ -9,9 +9,12 @@ import { open } from "@tauri-apps/plugin-shell";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import {
 	applySort,
+	buildListTabs,
+	copyableItemText,
 	extractTags,
 	filterItems,
 	findDuplicate,
+	extractInlineTags,
 	formatRelativeTime,
 	isImportableTheme,
 	normalizeThemeColors,
@@ -19,7 +22,6 @@ import {
 	extendRangeByIds,
 	itemsForTab,
 	lastToken,
-	LIST_TABS,
 	nextListTab,
 	normalizeTagInput,
 	matchAtSuggestions,
@@ -64,6 +66,10 @@ import {
 	Store,
 	SYSTEM_SOUNDS,
 	type Action,
+	type AutomationView,
+	type Collection,
+	type CollectionPredicate,
+	type CollectionQuery,
 	type CaptureMode,
 	type CustomTheme,
 	type HighlightSubmit,
@@ -83,6 +89,8 @@ import {
 	type ToastPosition,
 } from "./store";
 import { applyCustomPalette, clearCustomPalette, normalizeTheme, THEMES } from "./themes";
+import { createConfigBackup, parseConfigBackup } from "./config-backup";
+import { describeUpdateError } from "./update-status";
 
 const app = document.getElementById("app")!;
 
@@ -103,19 +111,9 @@ headerCount.className = "panel-header-count";
 panelHead.appendChild(headerCount);
 app.appendChild(panelHead);
 
-for (const tab of LIST_TABS) {
-	const btn = document.createElement("button");
-	btn.type = "button";
-	btn.role = "tab";
-	btn.className = "notch-tab";
-	btn.dataset.tab = tab.id;
-	btn.textContent = tab.label;
-	btn.addEventListener("click", () => {
-		if (currentTab === tab.id) return;
-		setListTab(tab.id);
-	});
-	tabsEl.appendChild(btn);
-}
+const tagFilterBar = document.createElement("div");
+tagFilterBar.className = "tag-filter-bar";
+tagFilterBar.hidden = true;
 
 const captureRow = document.createElement("div");
 captureRow.className = "capture-row";
@@ -196,6 +194,8 @@ async function checkAccessibilityPermission(): Promise<void> {
 }
 window.setTimeout(() => void checkAccessibilityPermission(), 800);
 
+app.appendChild(tagFilterBar);
+
 const list = document.createElement("div");
 list.className = "item-list";
 list.addEventListener("scroll", () => {
@@ -239,14 +239,20 @@ function showStatusToast(message: string, durationMs = 1800): void {
 }
 
 let items: Item[] = [];
+let collections: Collection[] = [];
 let filtered: Item[] = [];
 let currentTab: ListTab = "recent";
+/** Which tags are checked in the combined "Tags" tab's pill row — the plain tab id can't carry this. Irrelevant, and left as-is, for any other tab. */
+let selectedTagFilters = new Set<string>();
 let listLoadedCount = NOTCH_PAGE_SIZE;
 let listFilterKey = "";
 let templatesCache: Template[] = [];
 let customThemesCache: CustomTheme[] = [];
 let selected = -1;
 let settings: Settings | null = null;
+const ICLOUD_FOLDER_PATH = "~/Library/Mobile Documents/com~apple~CloudDocs/shiftshift";
+type SyncSetupFeedback = { kind: "success" | "error"; message: string; path?: string };
+let syncSetupFeedback: SyncSetupFeedback | null = null;
 /** Built up with Shift+↑/↓ (range) or Space (toggle); plain Enter copies them as a numbered list and closes. */
 const multiSelected = new Set<string>();
 /** Sticky end of a Shift+arrow range — walking back toward it unselects. */
@@ -272,6 +278,19 @@ let detailItem: Item | null = null;
 /** Id of the item currently being edited in the detail view's textarea, if any. */
 let detailEditingId: string | null = null;
 
+/** Enabled view definitions contributed by enabled automation hooks. The
+ * hook id is part of the runtime id so different plugins can use the same
+ * local view id without colliding in the tab bar. */
+function enabledAutomationViews(): AutomationView[] {
+	return (settings?.automation_hooks ?? []).flatMap((hook) =>
+		hook.enabled
+			? (hook.views ?? [])
+					.filter((view) => view.enabled && view.id.trim() && view.label.trim())
+					.map((view) => ({ ...view, id: `${hook.id}:${view.id}` }))
+			: [],
+	);
+}
+
 /**
  * Session-scoped (not persisted) undo/redo stacks for item mutations made
  * through this UI. Each entry carries enough state to reverse itself
@@ -284,6 +303,7 @@ type UndoEntry =
 	| { type: "toggle_done"; id: string }
 	| { type: "toggle_bookmarked"; id: string }
 	| { type: "set_kind"; id: string; from: ItemKind; to: ItemKind }
+	| { type: "set_tags"; id: string; from: string[]; to: string[] }
 	| { type: "update_text"; id: string; from: string; to: string }
 	| { type: "move"; id: string; from: number; to: number }
 	| { type: "bulk"; entries: UndoEntry[] };
@@ -315,6 +335,9 @@ async function undoMutation(entry: UndoEntry): Promise<void> {
 		case "set_kind":
 			await Store.setKind(entry.id, entry.from);
 			break;
+		case "set_tags":
+			await Store.setItemTags(entry.id, entry.from);
+			break;
 		case "update_text":
 			await Store.updateItemText(entry.id, entry.from);
 			break;
@@ -343,6 +366,9 @@ async function redoMutation(entry: UndoEntry): Promise<void> {
 			break;
 		case "set_kind":
 			await Store.setKind(entry.id, entry.to);
+			break;
+		case "set_tags":
+			await Store.setItemTags(entry.id, entry.to);
 			break;
 		case "update_text":
 			await Store.updateItemText(entry.id, entry.to);
@@ -449,6 +475,11 @@ async function loadSettings(): Promise<Settings> {
 		customThemesCache = await Store.listCustomThemes();
 		applyTheme(settings.theme);
 		applyInputSpellcheck(settings.input_spellcheck);
+		// `refresh()` may already have rendered the tab bar using the
+		// separate_tag_tabs default (both are fired at startup with no
+		// ordering between them) — re-render now that the real setting
+		// is known, in case that guess was wrong.
+		renderListTabs();
 	}
 	return settings;
 }
@@ -471,7 +502,78 @@ async function commitPreview(): Promise<void> {
 }
 
 function computeFiltered(): Item[] {
-	return applySort(filterItems(itemsForTab(items, currentTab), input.value), settings?.sort_mode ?? "manual");
+	const automationViews = enabledAutomationViews();
+	return applySort(
+		filterItems(itemsForTab(items, currentTab, selectedTagFilters, collections, automationViews), input.value),
+		activeViewSort(currentTab, automationViews),
+	);
+}
+
+function activeViewSort(tab: ListTab, automationViews: AutomationView[]): SortMode {
+	const fallback = settings?.sort_mode ?? "manual";
+	if (tab.startsWith("collection:")) {
+		const sort = collections.find((collection) => collection.id === tab.slice("collection:".length))?.sort;
+		return sort && SORT_OPTIONS.some((option) => option.mode === sort) ? sort : fallback;
+	}
+	if (tab.startsWith("automation:")) {
+		const sort = automationViews.find((view) => view.id === tab.slice("automation:".length))?.sort;
+		return sort && SORT_OPTIONS.some((option) => option.mode === sort) ? sort : fallback;
+	}
+	return fallback;
+}
+
+/**
+ * Rebuilds the tab bar (four fixed tabs plus either one tab per #tag or the
+ * combined "Tags" tab — see `buildListTabs`) and the "Tags" tab's own pill
+ * row. Called whenever `items` or the `separate_tag_tabs` setting change,
+ * since either can change which tags exist; a full rebuild rather than a
+ * diff, matching how the item list itself re-renders.
+ */
+function renderListTabs(): void {
+	const automationViews = enabledAutomationViews();
+	const tabs = buildListTabs(items, settings?.separate_tag_tabs ?? true, collections, automationViews);
+	if (!tabs.some((tab) => tab.id === currentTab)) currentTab = "recent";
+
+	tabsEl.innerHTML = "";
+	for (const tab of tabs) {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.role = "tab";
+		btn.className = "notch-tab";
+		btn.dataset.tab = tab.id;
+		if (tab.id.startsWith("collection:")) btn.classList.add("notch-tab-collection");
+		if (tab.id.startsWith("automation:")) {
+			btn.classList.add("notch-tab-automation");
+			const view = automationViews.find((candidate) => `automation:${candidate.id}` === tab.id);
+			if (view?.description) btn.title = view.description;
+		}
+		btn.textContent = tab.label;
+		btn.addEventListener("click", () => {
+			if (currentTab === tab.id) return;
+			setListTab(tab.id);
+		});
+		tabsEl.appendChild(btn);
+	}
+	paintListTabs();
+
+	tagFilterBar.hidden = currentTab !== "tags";
+	if (currentTab === "tags") {
+		tagFilterBar.innerHTML = "";
+		for (const tag of extractTags(items)) {
+			const pill = document.createElement("button");
+			pill.type = "button";
+			pill.className = "tag-filter-pill";
+			pill.classList.toggle("active", selectedTagFilters.has(tag));
+			pill.textContent = `#${tag}`;
+			pill.onclick = () => {
+				if (selectedTagFilters.has(tag)) selectedTagFilters.delete(tag);
+				else selectedTagFilters.add(tag);
+				renderListTabs();
+				renderList();
+			};
+			tagFilterBar.appendChild(pill);
+		}
+	}
 }
 
 function paintListTabs(): void {
@@ -487,12 +589,13 @@ function setListTab(tab: ListTab): void {
 	listFilterKey = "";
 	multiSelected.clear();
 	selectionAnchorId = null;
-	paintListTabs();
+	renderListTabs();
 	renderList();
 }
 
 function cycleListTab(delta: number): void {
-	setListTab(nextListTab(currentTab, delta));
+	const tabs = buildListTabs(items, settings?.separate_tag_tabs ?? true, collections, enabledAutomationViews());
+	setListTab(nextListTab(tabs, currentTab, delta));
 }
 
 /** How many rows the currently-shown suggestion/item list has — arrow-key nav and Enter/Tab commit logic all key off this so they never drift from what's rendered. */
@@ -587,7 +690,7 @@ function buildEmptyState(neverCaptured: boolean): HTMLElement {
 		wrapper.textContent = "Nothing captured yet — double-tap Shift, or type here and press ⌘Enter. Type /help for shortcuts.";
 		return wrapper;
 	}
-	const copy = emptyTabCopy(currentTab, input.value.trim().length > 0);
+	const copy = emptyTabCopy(currentTab, input.value.trim().length > 0, selectedTagFilters.size);
 	wrapper.textContent = `${copy.title} — ${copy.body}`;
 	return wrapper;
 }
@@ -1061,6 +1164,20 @@ function buildRow(item: Item, index: number): HTMLElement {
 		row.appendChild(text);
 	}
 
+	const legacyTags = new Set(extractInlineTags(item.text));
+	const metadataTags = (item.tags ?? []).filter((tag) => !legacyTags.has(tag.toLowerCase()));
+	if (metadataTags.length > 0) {
+		const tags = document.createElement("div");
+		tags.className = "item-tags";
+		for (const tag of metadataTags) {
+			const pill = document.createElement("span");
+			pill.className = "md-tag";
+			pill.textContent = `#${tag}`;
+			tags.appendChild(pill);
+		}
+		row.appendChild(tags);
+	}
+
 	if (editingId !== item.id) {
 		const time = document.createElement("span");
 		time.className = "item-time";
@@ -1093,7 +1210,7 @@ function buildRow(item: Item, index: number): HTMLElement {
 			(e) => {
 				if (e.button !== 0 || e.altKey) return;
 				if (pointerOnScrollbar(list, e.clientX)) return;
-				if (e.target instanceof Element && e.target.closest(".item-check, .item-edit-input, .item-actions"))
+				if (e.target instanceof Element && e.target.closest(".item-check, .item-edit-input, .item-actions, .link-label"))
 					return;
 				pointerReorder = applyListDrag(null, { type: "down", id: item.id, index, x: e.clientX, y: e.clientY }).state;
 				try {
@@ -1116,7 +1233,7 @@ function beginExternalDrag(id: string): void {
 	window.setTimeout(() => {
 		listDragging = false;
 	}, 0);
-	if (current) void Store.startItemDrag(current.kind, current.text);
+	if (current) void Store.startItemDrag(current.kind, copyableItemText(current));
 }
 
 function clearReorderMarks(): void {
@@ -1218,6 +1335,10 @@ list.addEventListener("selectstart", (e) => {
 });
 
 async function runItemChromeAction(item: Item, id: string): Promise<void> {
+	if (id === "preview") {
+		showDetail(item);
+		return;
+	}
 	if (id === "bookmark") {
 		pushUndo({ type: "toggle_bookmarked", id: item.id });
 		await Store.toggleBookmarked(item.id);
@@ -1233,6 +1354,11 @@ async function runItemChromeAction(item: Item, id: string): Promise<void> {
 	}
 	if (id === "edit") {
 		startEditing(item.id);
+		return;
+	}
+	if (id === "open") {
+		if (item.kind !== "link") return;
+		await actOnItem(item);
 		return;
 	}
 	if (id === "share") {
@@ -1303,8 +1429,16 @@ function buildLinkContent(item: Item): HTMLElement {
 	const wrapper = document.createElement("div");
 	wrapper.className = "item-text link-content";
 	wrapper.title = item.text;
-	wrapper.onclick = (e) => {
+
+	const link = document.createElement("a");
+	link.className = "link-label";
+	link.href = item.text;
+	link.target = "_blank";
+	link.rel = "noopener noreferrer";
+	link.onclick = (e) => {
+		e.preventDefault();
 		e.stopPropagation();
+		if (listDragging) return;
 		void actOnItem(item);
 	};
 
@@ -1314,13 +1448,14 @@ function buildLinkContent(item: Item): HTMLElement {
 		favicon.className = "item-favicon";
 		favicon.src = cached.favicon;
 		favicon.onerror = () => favicon.remove();
-		wrapper.appendChild(favicon);
+		link.appendChild(favicon);
 	}
 
 	const label = document.createElement("span");
-	label.className = "link-label";
+	label.className = "link-label-text";
 	label.textContent = cached && cached !== "loading" && cached.title ? cached.title : item.text;
-	wrapper.appendChild(label);
+	link.appendChild(label);
+	wrapper.appendChild(link);
 
 	if (!cached) {
 		linkPreviewCache.set(item.text, "loading");
@@ -1379,8 +1514,9 @@ async function actOnItem(item: Item): Promise<void> {
 	} else if (item.kind === "image") {
 		await Store.copyImageToClipboard(item.text);
 	} else {
-		await navigator.clipboard.writeText(item.text);
-		await Store.noteOwnClipboardWrite(item.text);
+		const text = copyableItemText(item);
+		await navigator.clipboard.writeText(text);
+		await Store.noteOwnClipboardWrite(text);
 	}
 	await Store.logUsed(item.id);
 }
@@ -1422,8 +1558,8 @@ async function copyMultiSelection(close: boolean, style: "numbered" | "plain" = 
 	const ordered = items.filter((item) => multiSelected.has(item.id));
 	const joined =
 		style === "plain"
-			? ordered.map((item) => item.text).join("\n")
-			: ordered.map((item, index) => `${index + 1}. ${item.text}`).join("\n");
+			? ordered.map(copyableItemText).join("\n")
+			: ordered.map((item, index) => `${index + 1}. ${copyableItemText(item)}`).join("\n");
 	await navigator.clipboard.writeText(joined);
 	await Store.noteOwnClipboardWrite(joined);
 	for (const item of ordered) await Store.logUsed(item.id);
@@ -1474,7 +1610,7 @@ async function bulkToggleTodo(): Promise<void> {
 	showStatusToast(`Toggled todo on ${selected.length} item${selected.length === 1 ? "" : "s"}`);
 }
 
-/** Appends the same `#tag` to every multi-selected item's text — the bulk counterpart of the detail view's single-item "Add a tag". */
+/** Adds the same tag to every multi-selected item's metadata. */
 function bulkAddTag(): void {
 	const selected = items.filter((item) => multiSelected.has(item.id));
 	if (selected.length === 0) return;
@@ -1488,9 +1624,11 @@ async function applyBulkTag(selected: Item[], raw: string): Promise<void> {
 	if (!clean) return;
 	const entries: UndoEntry[] = [];
 	for (const item of selected) {
-		const to = `${item.text} #${clean}`;
-		await Store.updateItemText(item.id, to);
-		entries.push({ type: "update_text", id: item.id, from: item.text, to });
+		const from = extractTags([item]);
+		if (from.includes(clean)) continue;
+		const to = [...from, clean].sort();
+		await Store.setItemTags(item.id, to);
+		entries.push({ type: "set_tags", id: item.id, from, to });
 	}
 	pushUndo({ type: "bulk", entries });
 	await refresh();
@@ -1525,8 +1663,9 @@ function buildDetailTop(item: Item, editing: boolean): HTMLElement {
 	copy.onclick = async () => {
 		if (item.kind === "image") await Store.copyImageToClipboard(item.text);
 		else {
-			await navigator.clipboard.writeText(item.text);
-			await Store.noteOwnClipboardWrite(item.text);
+			const text = copyableItemText(item);
+			await navigator.clipboard.writeText(text);
+			await Store.noteOwnClipboardWrite(text);
 		}
 		await Store.logUsed(item.id);
 		showStatusToast("Copied");
@@ -1613,9 +1752,11 @@ function buildDetailTags(item: Item): HTMLElement {
 	const addTag = async (): Promise<void> => {
 		const clean = normalizeTagInput(tagInput.value);
 		if (!clean) return;
-		const next = `${item.text} #${clean}`;
-		pushUndo({ type: "update_text", id: item.id, from: item.text, to: next });
-		await Store.updateItemText(item.id, next);
+		const from = extractTags([item]);
+		if (from.includes(clean)) return;
+		const next = [...from, clean].sort();
+		pushUndo({ type: "set_tags", id: item.id, from, to: next });
+		await Store.setItemTags(item.id, next);
 		await refresh();
 	};
 	tagInput.onkeydown = (e) => {
@@ -1700,10 +1841,17 @@ function buildDetailView(item: Item): void {
 			};
 			body.appendChild(title);
 		}
-		const link = document.createElement("div");
+		const link = document.createElement("a");
 		link.className = "detail-link";
+		link.href = item.text;
+		link.target = "_blank";
+		link.rel = "noopener noreferrer";
 		link.textContent = item.text;
-		link.onclick = () => void open(item.text);
+		link.onclick = (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			void actOnItem(item);
+		};
 		body.appendChild(link);
 	} else {
 		const text = document.createElement("div");
@@ -1795,6 +1943,8 @@ function buildDetailView(item: Item): void {
 }
 
 function showDetail(item: Item): void {
+	const itemIndex = filtered.findIndex((candidate) => candidate.id === item.id);
+	if (itemIndex >= 0) selected = itemIndex;
 	detailItem = item;
 	detailEditingId = null;
 	buildDetailView(item);
@@ -1841,7 +1991,11 @@ function closeDetail(): void {
 }
 
 async function refresh(): Promise<void> {
-	[items, templatesCache] = await Promise.all([Store.listItems(), Store.listTemplates()]);
+	[items, templatesCache, collections] = await Promise.all([
+		Store.listItems(),
+		Store.listTemplates(),
+		Store.listCollections(),
+	]);
 	if (detailItem && !detailView.hidden) {
 		const updated = items.find((i) => i.id === detailItem!.id);
 		if (updated) {
@@ -1851,6 +2005,7 @@ async function refresh(): Promise<void> {
 			closeDetail();
 		}
 	}
+	renderListTabs();
 	renderList();
 }
 
@@ -1860,8 +2015,9 @@ async function saveNew(raw: string, copy = false): Promise<void> {
 	const item = await Store.addItem(text, kind);
 	pushUndo({ type: "add", item });
 	if (copy) {
-		await navigator.clipboard.writeText(text);
-		await Store.noteOwnClipboardWrite(text);
+		const copiedText = copyableItemText({ kind, text });
+		await navigator.clipboard.writeText(copiedText);
+		await Store.noteOwnClipboardWrite(copiedText);
 		await Store.logUsed(item.id);
 	}
 	input.value = "";
@@ -2156,6 +2312,11 @@ document.addEventListener("keydown", async (e) => {
 		startEditing(filtered[selected]!.id);
 		return;
 	}
+	if (modKey && e.key.toLowerCase() === "o" && selected >= 0 && filtered[selected]?.kind === "link") {
+		e.preventDefault();
+		await runItemChromeAction(filtered[selected]!, "open");
+		return;
+	}
 	if (modKey && e.shiftKey && e.key.toLowerCase() === "s" && selected >= 0 && filtered[selected]) {
 		e.preventDefault();
 		await shareItem(filtered[selected]!);
@@ -2332,8 +2493,9 @@ input.addEventListener("paste", (e) => {
 });
 
 // The Rust side emits "refresh" after any mutation made outside this window
-// (capture-selection hotkey, tray actions, CLI capture) so the list stays
-// in sync without polling.
+// (capture-selection hotkey, tray actions, CLI capture). Folder-backed items
+// are also reread when this panel becomes visible again, so iCloud downloads
+// don't require a full app restart to appear.
 listen("refresh", () => void refresh());
 listen("open-settings", () => {
 	void openSettings();
@@ -2366,6 +2528,11 @@ listen("dock-position-changed", () => {
 
 window.addEventListener("focus", () => {
 	if (!captureRow.hidden) input.focus();
+	void refresh();
+});
+
+document.addEventListener("visibilitychange", () => {
+	if (document.visibilityState === "visible") void refresh();
 });
 
 // "Click outside to close": the panel is always-on-top with no title bar, so
@@ -2687,6 +2854,7 @@ function buildCheckboxRow(label: string, checked: boolean, disabled: boolean, pa
 		const next = { ...current, ...patch(checkbox.checked) };
 		settings = next;
 		applyInputSpellcheck(next.input_spellcheck);
+		renderListTabs();
 		await Store.setSettings(next);
 		await openSettings();
 	};
@@ -3217,6 +3385,12 @@ function buildBehaviorRows(current: Settings): HTMLElement[] {
 			false,
 			(checked) => ({ clipboard_watch: checked }),
 		),
+		buildCheckboxRow(
+			"Separate tab per tag",
+			current.separate_tag_tabs,
+			false,
+			(checked) => ({ separate_tag_tabs: checked }),
+		),
 	];
 }
 
@@ -3283,6 +3457,400 @@ function buildExcludedAppsRow(current: Settings): HTMLElement {
 	};
 	row.appendChild(textarea);
 
+	return row;
+}
+
+const COLLECTION_FIELDS: Array<{ field: CollectionPredicate["field"]; label: string }> = [
+	{ field: "tag", label: "Tag" },
+	{ field: "kind", label: "Type" },
+	{ field: "done", label: "Done" },
+	{ field: "bookmarked", label: "Bookmarked" },
+	{ field: "source_app", label: "Source app" },
+	{ field: "text", label: "Text" },
+	{ field: "created_at", label: "Created" },
+];
+
+function collectionOperators(field: CollectionPredicate["field"]): CollectionPredicate["operator"][] {
+	if (field === "created_at") return ["before", "after"];
+	if (field === "source_app" || field === "text") return ["equals", "contains"];
+	return ["equals"];
+}
+
+function collectionPredicateLabel(predicate: CollectionPredicate): string {
+	const field = COLLECTION_FIELDS.find((option) => option.field === predicate.field)?.label ?? predicate.field;
+	const operator = predicate.operator === "equals" ? "is" : predicate.operator;
+	return `${field} ${operator} ${predicate.value || "…"}`;
+}
+
+function collectionQuerySummary(query: CollectionQuery): string {
+	const groups: string[] = [];
+	if (query.all.length > 0) groups.push(query.all.map(collectionPredicateLabel).join(" · "));
+	if (query.any.length > 0) groups.push(`any: ${query.any.map(collectionPredicateLabel).join(" · ")}`);
+	if (query.none.length > 0) groups.push(`not: ${query.none.map(collectionPredicateLabel).join(" · ")}`);
+	return groups.join("; ") || "Everything";
+}
+
+function newCollectionId(): string {
+	if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+	return `collection-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildCollectionEditor(editing: Collection | null, onDone: () => Promise<void>): HTMLElement {
+	const wrapper = document.createElement("div");
+	wrapper.className = "collection-editor";
+	const draft: Collection = editing
+		? {
+				...editing,
+				query: {
+					all: [...editing.query.all],
+					any: [...editing.query.any],
+					none: [...editing.query.none],
+				},
+			}
+		: {
+				id: newCollectionId(),
+				name: "",
+				query: { all: [], any: [], none: [] },
+				sort: "manual",
+				rank: (collections[0]?.rank ?? 0) + 1000,
+				icon: null,
+				color: null,
+				created_at: new Date().toISOString(),
+				updated_at: new Date().toISOString(),
+			};
+
+	const title = document.createElement("div");
+	title.className = "collection-editor-title";
+	title.textContent = editing ? `Edit collection: ${editing.name}` : "New collection";
+	wrapper.appendChild(title);
+
+	const nameRow = document.createElement("div");
+	nameRow.className = "settings-row";
+	const nameLabel = document.createElement("label");
+	nameLabel.textContent = "Name";
+	nameRow.appendChild(nameLabel);
+	const nameInput = document.createElement("input");
+	nameInput.placeholder = "e.g. Work queue";
+	nameInput.value = draft.name;
+	nameInput.oninput = () => (draft.name = nameInput.value);
+	nameRow.appendChild(nameInput);
+	const sortSelect = document.createElement("select");
+	for (const option of SORT_OPTIONS) {
+		const entry = document.createElement("option");
+		entry.value = option.mode;
+		entry.textContent = option.label;
+		entry.selected = draft.sort === option.mode;
+		sortSelect.appendChild(entry);
+	}
+	sortSelect.onchange = () => (draft.sort = sortSelect.value as SortMode);
+	nameRow.appendChild(sortSelect);
+	wrapper.appendChild(nameRow);
+
+	const hint = document.createElement("div");
+	hint.className = "collection-editor-hint";
+	hint.textContent = "All facets below must match. Automation/plugin views can also use any and not groups in JSON.";
+	wrapper.appendChild(hint);
+
+	const clauses = document.createElement("div");
+	clauses.className = "collection-clauses";
+	wrapper.appendChild(clauses);
+
+	const renderClauses = (): void => {
+		clauses.innerHTML = "";
+		if (draft.query.all.length === 0) {
+			const empty = document.createElement("div");
+			empty.className = "collection-editor-empty";
+			empty.textContent = "No facets — this collection shows every item.";
+			clauses.appendChild(empty);
+		}
+		draft.query.all.forEach((predicate, index) => {
+			const row = document.createElement("div");
+			row.className = "collection-clause";
+			const fieldSelect = document.createElement("select");
+			for (const option of COLLECTION_FIELDS) {
+				const entry = document.createElement("option");
+				entry.value = option.field;
+				entry.textContent = option.label;
+				entry.selected = predicate.field === option.field;
+				fieldSelect.appendChild(entry);
+			}
+			fieldSelect.onchange = () => {
+				predicate.field = fieldSelect.value as CollectionPredicate["field"];
+				predicate.operator = collectionOperators(predicate.field)[0]!;
+				renderClauses();
+			};
+			row.appendChild(fieldSelect);
+
+			const operatorSelect = document.createElement("select");
+			for (const operator of collectionOperators(predicate.field)) {
+				const entry = document.createElement("option");
+				entry.value = operator;
+				entry.textContent = operator === "equals" ? "is" : operator;
+				entry.selected = predicate.operator === operator;
+				operatorSelect.appendChild(entry);
+			}
+			operatorSelect.onchange = () => (predicate.operator = operatorSelect.value as CollectionPredicate["operator"]);
+			row.appendChild(operatorSelect);
+
+			const valueInput = document.createElement("input");
+			valueInput.placeholder = predicate.field === "created_at" ? "ISO date/time" : "value";
+			valueInput.value = predicate.value;
+			valueInput.oninput = () => (predicate.value = valueInput.value);
+			row.appendChild(valueInput);
+			const remove = document.createElement("button");
+			remove.type = "button";
+			remove.textContent = "×";
+			remove.title = "Remove facet";
+			remove.onclick = () => {
+				draft.query.all.splice(index, 1);
+				renderClauses();
+			};
+			row.appendChild(remove);
+			clauses.appendChild(row);
+		});
+	};
+	renderClauses();
+
+	const addFacet = document.createElement("button");
+	addFacet.type = "button";
+	addFacet.textContent = "Add facet";
+	addFacet.onclick = () => {
+		draft.query.all.push({ field: "tag", operator: "equals", value: "" });
+		renderClauses();
+	};
+	wrapper.appendChild(addFacet);
+
+	const actions = document.createElement("div");
+	actions.className = "collection-editor-actions";
+	const save = document.createElement("button");
+	save.type = "button";
+	save.textContent = editing ? "Save collection" : "Create collection";
+	const status = document.createElement("span");
+	status.className = "settings-readout";
+	save.onclick = async () => {
+		draft.name = nameInput.value.trim();
+		if (!draft.name) {
+			status.textContent = "Name is required";
+			nameInput.focus();
+			return;
+		}
+		if (draft.query.all.some((predicate) => !predicate.value.trim())) {
+			status.textContent = "Every facet needs a value";
+			return;
+		}
+		save.disabled = true;
+		draft.updated_at = new Date().toISOString();
+		try {
+			await Store.saveCollection(draft);
+			await onDone();
+		} catch (error) {
+			status.textContent = `Could not save: ${String(error)}`;
+			save.disabled = false;
+		}
+	};
+	actions.appendChild(save);
+	const cancel = document.createElement("button");
+	cancel.type = "button";
+	cancel.textContent = "Cancel";
+	cancel.onclick = () => void onDone();
+	actions.appendChild(cancel);
+	actions.appendChild(status);
+	wrapper.appendChild(actions);
+	return wrapper;
+}
+
+function renderCollectionsSettingsSection(container: HTMLElement, editingId: string | null = null): void {
+	container.innerHTML = "";
+	for (const collection of collections) {
+		const row = document.createElement("div");
+		row.className = "settings-row collection-setting-row";
+		const info = document.createElement("div");
+		info.className = "collection-setting-info";
+		const name = document.createElement("strong");
+		name.textContent = collection.name;
+		info.appendChild(name);
+		const summary = document.createElement("span");
+		summary.className = "settings-readout";
+		summary.textContent = collectionQuerySummary(collection.query);
+		info.appendChild(summary);
+		row.appendChild(info);
+		const use = document.createElement("button");
+		use.type = "button";
+		use.textContent = "Use";
+		use.onclick = () => {
+			setListTab(`collection:${collection.id}`);
+			closeSettings();
+		};
+		row.appendChild(use);
+		const edit = document.createElement("button");
+		edit.type = "button";
+		edit.textContent = "Edit";
+		edit.onclick = () => renderCollectionsSettingsSection(container, collection.id);
+		row.appendChild(edit);
+		const remove = document.createElement("button");
+		remove.type = "button";
+		remove.className = "template-delete";
+		remove.textContent = "Delete";
+		remove.onclick = async () => {
+			if (!window.confirm(`Delete collection “${collection.name}”? The items will stay.`)) return;
+			await Store.deleteCollection(collection.id);
+			await refresh();
+			renderCollectionsSettingsSection(container);
+		};
+		row.appendChild(remove);
+		container.appendChild(row);
+		if (editingId === collection.id) {
+			const editor = buildCollectionEditor(collection, async () => {
+				await refresh();
+				renderCollectionsSettingsSection(container);
+			});
+			container.appendChild(editor);
+		}
+	}
+	if (!editingId) {
+		const add = document.createElement("button");
+		add.type = "button";
+		add.textContent = "New collection";
+		add.onclick = () => renderCollectionsSettingsSection(container, "__new__");
+		container.appendChild(add);
+	} else if (editingId === "__new__") {
+		container.appendChild(
+			buildCollectionEditor(null, async () => {
+				await refresh();
+				renderCollectionsSettingsSection(container);
+			}),
+		);
+	}
+}
+
+function buildCollectionsSettingsSection(): HTMLElement {
+	const container = document.createElement("div");
+	container.className = "collections-settings-section";
+	renderCollectionsSettingsSection(container);
+	return container;
+}
+
+/**
+ * Small JSON editor for external automations. Keeping hook definitions in
+ * Settings means they are written to settings.json and travel with the
+ * existing config export/import, while the command itself stays provider-
+ * neutral and can live in any language.
+ */
+function buildAutomationHooksRow(current: Settings): HTMLElement {
+	const row = document.createElement("div");
+	row.className = "settings-row automation-hooks-row";
+	row.dataset.search = "automation hooks plugin event command classify organize llm apply tags";
+
+	const label = document.createElement("label");
+	label.textContent = "Automation hooks (JSON)";
+	row.appendChild(label);
+
+	const hint = document.createElement("div");
+	hint.className = "automation-hooks-hint";
+	hint.textContent =
+		"Runs enabled commands after item events. JSON goes in on stdin; return { actions: [...] } on stdout. Add views to a hook to contribute custom faceted views. See AUTOMATIONS.md.";
+	row.appendChild(hint);
+
+	const textarea = document.createElement("textarea");
+	textarea.className = "automation-hooks-textarea";
+	textarea.spellcheck = false;
+	textarea.value = JSON.stringify(current.automation_hooks, null, 2);
+	row.appendChild(textarea);
+
+	const views = document.createElement("div");
+	views.className = "automation-view-toggles";
+	row.appendChild(views);
+
+	const renderViews = (hooks: Settings["automation_hooks"]): void => {
+		views.innerHTML = "";
+		const contributed = hooks.flatMap((hook) => (hook.views ?? []).map((view) => ({ hook, view })));
+		if (contributed.length === 0) {
+			const empty = document.createElement("div");
+			empty.className = "automation-hooks-hint";
+			empty.textContent = "No custom views configured. Add a views array to a hook above.";
+			views.appendChild(empty);
+			return;
+		}
+		const title = document.createElement("div");
+		title.className = "automation-views-title";
+		title.textContent = "Contributed faceted views";
+		views.appendChild(title);
+		for (const { hook, view } of contributed) {
+			const viewRow = document.createElement("label");
+			viewRow.className = "automation-view-row";
+			const checkbox = document.createElement("input");
+			checkbox.type = "checkbox";
+			checkbox.checked = view.enabled;
+			checkbox.disabled = !hook.enabled;
+			checkbox.onchange = async () => {
+				const latest = await Store.getSettings();
+				const next = {
+					...latest,
+					automation_hooks: latest.automation_hooks.map((candidate) =>
+						candidate.id !== hook.id
+							? candidate
+							: {
+									...candidate,
+									views: (candidate.views ?? []).map((candidateView) =>
+										candidateView.id === view.id ? { ...candidateView, enabled: checkbox.checked } : candidateView,
+									),
+								},
+					),
+				};
+				settings = next;
+				await Store.setSettings(next);
+				textarea.value = JSON.stringify(next.automation_hooks, null, 2);
+				renderListTabs();
+				renderList();
+			};
+			viewRow.appendChild(checkbox);
+			const text = document.createElement("span");
+			text.textContent = `${view.icon ? `${view.icon} ` : ""}${view.label}`;
+			viewRow.appendChild(text);
+			if (view.description) {
+				const description = document.createElement("small");
+				description.textContent = view.description;
+				viewRow.appendChild(description);
+			}
+			const source = document.createElement("em");
+			source.textContent = `from ${hook.id}`;
+			viewRow.appendChild(source);
+			views.appendChild(viewRow);
+		}
+	};
+	renderViews(current.automation_hooks);
+
+	const actions = document.createElement("div");
+	actions.className = "automation-hooks-actions";
+	const save = document.createElement("button");
+	save.type = "button";
+	save.textContent = "Save hooks";
+	const status = document.createElement("span");
+	status.className = "settings-readout";
+	save.onclick = async () => {
+		save.disabled = true;
+		status.classList.remove("automation-hooks-error");
+		try {
+			const parsed: unknown = JSON.parse(textarea.value);
+			if (!Array.isArray(parsed)) throw new Error("hooks must be a JSON array");
+			const latest = await Store.getSettings();
+			const next = { ...latest, automation_hooks: parsed as Settings["automation_hooks"] };
+			await Store.setSettings(next);
+			settings = next;
+			renderViews(next.automation_hooks);
+			renderListTabs();
+			renderList();
+			status.textContent = `${next.automation_hooks.length} hook${next.automation_hooks.length === 1 ? "" : "s"} saved`;
+		} catch (error) {
+			status.textContent = `Could not save hooks: ${String(error)}`;
+			status.classList.add("automation-hooks-error");
+		} finally {
+			save.disabled = false;
+		}
+	};
+	actions.appendChild(save);
+	actions.appendChild(status);
+	row.appendChild(actions);
 	return row;
 }
 
@@ -3456,75 +4024,63 @@ function buildExportRow(): HTMLElement {
 	return row;
 }
 
-/** Whole-settings export/import to reproduce your setup on another machine — same clipboard-JSON pattern as custom themes' import/export, just for every setting instead of just themes. Includes S3 credentials if configured, since this is meant to fully reproduce your own setup; be mindful of where the copied text ends up (a public dotfiles repo, etc). */
-function buildConfigBackupRow(current: Settings): HTMLElement {
+/** Portable config export/import for settings, snippet templates, and custom themes. The S3 secret stays in the OS Keychain and is intentionally excluded. */
+function buildConfigBackupRow(): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "settings-row";
 
 	const exportBtn = document.createElement("button");
-	exportBtn.textContent = "Export to clipboard";
+	exportBtn.textContent = "Export config to clipboard";
+	exportBtn.title = "Exports settings, templates, and custom themes. The S3 secret stays in the OS Keychain.";
 	exportBtn.onclick = async () => {
-		const custom_themes = await Store.listCustomThemes();
-		await navigator.clipboard.writeText(JSON.stringify({ settings: current, custom_themes }, null, 2));
+		const [latest, templates, customThemes] = await Promise.all([
+			Store.getSettings(),
+			Store.listTemplates(),
+			Store.listCustomThemes(),
+		]);
+		settings = latest;
+		await navigator.clipboard.writeText(JSON.stringify(createConfigBackup(latest, templates, customThemes), null, 2));
 		exportBtn.textContent = "Copied!";
-		setTimeout(() => (exportBtn.textContent = "Export to clipboard"), 1500);
+		setTimeout(() => (exportBtn.textContent = "Export config to clipboard"), 1500);
 	};
 	row.appendChild(exportBtn);
 
 	const importBtn = document.createElement("button");
-	importBtn.textContent = "Import from clipboard";
+	importBtn.textContent = "Import config from clipboard";
+	importBtn.title = "Restores settings, templates, and custom themes. S3 credentials must be entered again on this Mac.";
 	importBtn.onclick = async () => {
 		try {
 			const raw = await navigator.clipboard.readText();
-			const parsed: unknown = JSON.parse(raw);
-			if (typeof parsed !== "object" || parsed === null) {
-				throw new Error("not a shiftshift settings export");
-			}
-			const record = parsed as Record<string, unknown>;
-			const settingsPayload =
-				typeof record.settings === "object" && record.settings !== null && "bindings" in (record.settings as object)
-					? (record.settings as Partial<Settings>)
-					: "bindings" in record
-						? (record as Partial<Settings>)
-						: null;
-			if (!settingsPayload) throw new Error("not a shiftshift settings export");
-			const next = { ...current, ...settingsPayload };
+			const backup = parseConfigBackup(JSON.parse(raw) as unknown);
+			const latest = await Store.getSettings();
+			const next = { ...latest, ...backup.settings };
 			settings = next;
 			await Store.setSettings(next);
-			if (Array.isArray(record.custom_themes)) {
-				const imported: CustomTheme[] = [];
-				for (const entry of record.custom_themes) {
-					if (typeof entry !== "object" || entry === null) continue;
-					const theme = entry as Record<string, unknown>;
-					if (typeof theme.id !== "string" || !theme.id) continue;
-					if (!isImportableTheme({ name: theme.name, mode: theme.mode, colors: theme.colors })) continue;
-					imported.push({
-						id: theme.id,
-						name: theme.name as string,
-						mode: theme.mode as "light" | "dark",
-						colors: normalizeThemeColors(theme.colors as ThemeColors),
-					});
-				}
-				if (imported.length > 0) {
-					await Store.replaceCustomThemes(imported);
-					customThemesCache = imported;
-				}
+			if (backup.templates) {
+				await Store.replaceTemplates(backup.templates);
+				templatesCache = backup.templates;
 			}
+			if (backup.customThemes) {
+				await Store.replaceCustomThemes(backup.customThemes);
+				customThemesCache = backup.customThemes;
+			}
+			applyTheme(next.theme);
 			importBtn.textContent = "Imported!";
-			setTimeout(() => (importBtn.textContent = "Import from clipboard"), 1500);
+			setTimeout(() => (importBtn.textContent = "Import config from clipboard"), 1500);
 			await openSettings();
-		} catch {
+		} catch (error) {
+			console.error("Could not import config", error);
 			importBtn.textContent = "Invalid clipboard content";
-			setTimeout(() => (importBtn.textContent = "Import from clipboard"), 1500);
+			setTimeout(() => (importBtn.textContent = "Import config from clipboard"), 1500);
 		}
 	};
 	row.appendChild(importBtn);
 
 	const resetAll = document.createElement("button");
 	resetAll.textContent = "Reset all settings";
-	resetAll.title = "Factory defaults. Custom themes and the S3 key stay.";
+	resetAll.title = "Factory defaults. Custom themes, templates, and the S3 key stay.";
 	resetAll.onclick = async () => {
-		if (!window.confirm("Reset every setting to factory defaults? Custom themes stay.")) return;
+		if (!window.confirm("Reset every setting to factory defaults? Custom themes and templates stay.")) return;
 		settings = await Store.resetSettings();
 		clearCustomPalette(document.documentElement);
 		applyTheme(settings.theme);
@@ -3551,38 +4107,74 @@ async function buildUpdatesRow(): Promise<HTMLElement> {
 	row.appendChild(status);
 
 	const checkBtn = document.createElement("button");
-	checkBtn.textContent = "Check for updates";
-	checkBtn.onclick = async () => {
+	const feedback = document.createElement("span");
+	feedback.className = "update-feedback";
+	feedback.setAttribute("role", "status");
+	feedback.setAttribute("aria-live", "polite");
+
+	function showFeedback(message: string, kind: "info" | "success" | "error", detail = message): void {
+		feedback.className = `update-feedback update-feedback-${kind}`;
+		feedback.textContent = message;
+		feedback.title = detail === message ? "" : detail;
+	}
+
+	function showInstallAction(
+		update: { version: string; downloadAndInstall: () => Promise<void> },
+		message = `Update v${update.version} is available.`,
+		kind: "info" | "success" | "error" = "info",
+		detail = message,
+	): void {
+		showFeedback(message, kind, detail);
+		checkBtn.textContent = `Install v${update.version} & restart`;
+		checkBtn.disabled = false;
+		checkBtn.onclick = () => void installUpdate(update);
+	}
+
+	async function installUpdate(update: { version: string; downloadAndInstall: () => Promise<void> }): Promise<void> {
+		checkBtn.disabled = true;
+		checkBtn.textContent = "Installing…";
+		showFeedback(`Downloading v${update.version}…`, "info");
+		try {
+			await update.downloadAndInstall();
+			await relaunch();
+		} catch (err) {
+			const failure = describeUpdateError(err, "install");
+			console.error("Failed to install update", err);
+			showInstallAction(update, failure.message, "error", failure.detail);
+		}
+	}
+
+	async function checkForUpdates(): Promise<void> {
 		checkBtn.disabled = true;
 		checkBtn.textContent = "Checking…";
+		showFeedback("Checking for updates…", "info");
 		try {
 			const update = await checkForUpdate();
 			if (!update) {
 				checkBtn.textContent = "Up to date";
+				showFeedback("You’re up to date.", "success");
 				setTimeout(() => {
 					checkBtn.textContent = "Check for updates";
 					checkBtn.disabled = false;
+					checkBtn.onclick = () => void checkForUpdates();
 				}, 1500);
 				return;
 			}
-			checkBtn.textContent = `Install v${update.version} & restart`;
-			checkBtn.disabled = false;
-			checkBtn.onclick = async () => {
-				checkBtn.disabled = true;
-				checkBtn.textContent = "Installing…";
-				await update.downloadAndInstall();
-				await relaunch();
-			};
+			showInstallAction(update);
 		} catch (err) {
-			checkBtn.textContent = "Check failed";
-			console.error(err);
-			setTimeout(() => {
-				checkBtn.textContent = "Check for updates";
-				checkBtn.disabled = false;
-			}, 1500);
+			const failure = describeUpdateError(err);
+			console.error("Failed to check for updates", err);
+			showFeedback(failure.message, "error", failure.detail);
+			checkBtn.textContent = "Check for updates";
+			checkBtn.disabled = false;
+			checkBtn.onclick = () => void checkForUpdates();
 		}
-	};
+	}
+
+	checkBtn.textContent = "Check for updates";
+	checkBtn.onclick = () => void checkForUpdates();
 	row.appendChild(checkBtn);
+	row.appendChild(feedback);
 
 	return row;
 }
@@ -3671,8 +4263,10 @@ function buildSyncRows(current: Settings): HTMLElement[] {
 	backendSelect.onchange = async () => {
 		const next = { ...current, backend: backendSelect.value as Settings["backend"] };
 		settings = next;
+		clearSyncSetupFeedback();
 		await Store.setSettings(next);
 		refreshSyncRowsContainer(next);
+		updateSyncStatusRow();
 	};
 	backendRow.appendChild(backendSelect);
 
@@ -3726,6 +4320,7 @@ function buildSyncRows(current: Settings): HTMLElement[] {
 		pathInput.onchange = async () => {
 			const next = { ...current, folder_path: pathInput.value };
 			settings = next;
+			clearSyncSetupFeedback();
 			await Store.setSettings(next);
 		};
 		row.appendChild(pathInput);
@@ -3739,18 +4334,31 @@ function buildSyncRows(current: Settings): HTMLElement[] {
 		const icloudRow = document.createElement("div");
 		icloudRow.className = "settings-row";
 		const icloudLabel = document.createElement("label");
-		icloudLabel.textContent = "Already signed into iCloud? One click, no setup:";
+		icloudLabel.textContent = "Already signed into iCloud? Set up the sync folder:";
 		icloudRow.appendChild(icloudLabel);
 		const icloudBtn = document.createElement("button");
-		icloudBtn.textContent = "Use iCloud Drive";
+		icloudBtn.textContent = "Set up iCloud Drive";
 		icloudBtn.onclick = async () => {
-			const next = { ...current, folder_path: "~/Library/Mobile Documents/com~apple~CloudDocs/shiftshift" };
-			settings = next;
-			await Store.setSettings(next);
+			icloudBtn.disabled = true;
+			icloudBtn.textContent = "Creating folder…";
+			try {
+				const resolvedPath = await Store.prepareIcloudFolder();
+				const next = { ...(settings ?? current), backend: "folder" as const, folder_path: ICLOUD_FOLDER_PATH };
+				await Store.setSettings(next);
+				settings = next;
+				syncSetupFeedback = {
+					kind: "success",
+					path: resolvedPath,
+					message: `Folder ready at ${resolvedPath}. Restart ShiftShift to activate iCloud storage.`,
+				};
+			} catch (error) {
+				syncSetupFeedback = { kind: "error", message: `iCloud Drive setup failed: ${String(error)}` };
+			}
 			await openSettings();
 		};
 		icloudRow.appendChild(icloudBtn);
 		rows.push(icloudRow);
+		rows.push(buildSyncTimingRow());
 	}
 	return rows;
 }
@@ -4172,6 +4780,8 @@ const SETTINGS_NAV: Array<[string, string]> = [
 	["Alerts", "Notifications"],
 	["Dock", "Dock"],
 	["Snips", "Snippet templates"],
+	["Collections", "Collections"],
+	["Automate", "Automations"],
 	["Sync", "Sync"],
 	["Data", "Data"],
 ];
@@ -4238,6 +4848,9 @@ function buildSyncStatusRow(status: SyncStatus): HTMLElement {
 	if (status.fallback_reason) {
 		label.textContent = `⚠️ Using ${backendLabels[status.active_backend]} — ${status.fallback_reason}`;
 		row.classList.add("sync-status-warning");
+	} else if (status.active_backend !== status.configured_backend) {
+		label.textContent = `⏳ Configured: ${backendLabels[status.configured_backend]} — restart ShiftShift to activate (currently ${backendLabels[status.active_backend]})`;
+		row.classList.add("sync-status-pending");
 	} else {
 		label.textContent = `✓ Active: ${backendLabels[status.active_backend]}`;
 	}
@@ -4245,16 +4858,82 @@ function buildSyncStatusRow(status: SyncStatus): HTMLElement {
 	return row;
 }
 
+function updateSyncStatusRow(): void {
+	const currentRow = settingsView.querySelector<HTMLElement>(".sync-status-row");
+	if (!currentRow) return;
+	void Store.getSyncStatus().then((status) => {
+		if (currentRow.isConnected) currentRow.replaceWith(buildSyncStatusRow(status));
+	});
+}
+
+function clearSyncSetupFeedback(): void {
+	syncSetupFeedback = null;
+	settingsView.querySelector(".sync-setup-feedback")?.remove();
+}
+
+function buildSyncSetupFeedbackRow(): HTMLElement | null {
+	if (!syncSetupFeedback) return null;
+	const feedback = syncSetupFeedback;
+	const row = document.createElement("div");
+	row.className = `settings-row sync-setup-feedback sync-setup-feedback-${feedback.kind}`;
+	row.setAttribute("role", "status");
+	row.setAttribute("aria-live", "polite");
+	const message = document.createElement("span");
+	message.textContent = feedback.message;
+	row.appendChild(message);
+	if (feedback.kind === "success" && feedback.path) {
+		const openFolder = document.createElement("button");
+		openFolder.textContent = "Open folder";
+		openFolder.onclick = () => {
+			void open(feedback.path!).catch((error: unknown) => {
+				showStatusToast(`Could not open the folder: ${String(error)}`, 4000);
+			});
+		};
+		row.appendChild(openFolder);
+		const restart = document.createElement("button");
+		restart.textContent = "Restart now";
+		restart.onclick = async () => {
+			restart.disabled = true;
+			restart.textContent = "Restarting…";
+			try {
+				await relaunch();
+			} catch (error) {
+				syncSetupFeedback = { kind: "error", message: `Could not restart ShiftShift: ${String(error)}` };
+				await openSettings();
+			}
+		};
+		row.appendChild(restart);
+	}
+	return row;
+}
+
+function buildSyncTimingRow(): HTMLElement {
+	const row = document.createElement("div");
+	row.className = "settings-row sync-info-row";
+	const copy = document.createElement("span");
+	copy.textContent =
+		"After restart, each change is written here immediately. iCloud Drive uploads and downloads the files in the background; another Mac will see them after iCloud finishes. ShiftShift rereads the folder when the panel becomes visible again — there is no separate sync job to start.";
+	row.appendChild(copy);
+	return row;
+}
+
 async function openSettings(): Promise<void> {
 	const firstOpen = settingsView.hidden;
 	const savedScroll = firstOpen ? 0 : settingsView.scrollTop;
-	const [current, templates, syncStatus, accessibilityTrusted, inputMonitoringGranted] = await Promise.all([
+	const [current, templates, savedCollections, syncStatus, accessibilityTrusted, inputMonitoringGranted] = await Promise.all([
 		loadSettings(),
 		Store.listTemplates(),
+		Store.listCollections(),
 		Store.getSyncStatus(),
 		Store.accessibilityTrusted(),
 		Store.inputMonitoringGranted(),
 	]);
+	collections = savedCollections;
+	const previousSearch = settingsView.querySelector<HTMLInputElement>(".settings-search");
+	const savedFilter = previousSearch?.value ?? "";
+	const restoreSearchFocus = document.activeElement === previousSearch;
+	const savedSelectionStart = previousSearch?.selectionStart ?? null;
+	const savedSelectionEnd = previousSearch?.selectionEnd ?? null;
 	settingsView.innerHTML = "";
 	settingsView.appendChild(buildSettingsNav());
 
@@ -4322,12 +5001,20 @@ async function openSettings(): Promise<void> {
 	}
 	settingsView.appendChild(buildAddTemplateForm());
 
+	settingsView.appendChild(heading("Collections", "collections views organize tags facets smart saved filter"));
+	settingsView.appendChild(buildCollectionsSettingsSection());
+
+	settingsView.appendChild(heading("Automations", "hooks plugin events command classify organize llm tags apply"));
+	settingsView.appendChild(buildAutomationHooksRow(current));
+
 	settingsView.appendChild(heading("Sync", "sync s3 folder backup encrypt cloud"));
 	settingsView.appendChild(buildSyncStatusRow(syncStatus));
 	const syncContainer = document.createElement("div");
 	syncContainer.id = "sync-rows-container";
 	for (const row of buildSyncRows(current)) syncContainer.appendChild(row);
 	settingsView.appendChild(syncContainer);
+	const setupFeedback = buildSyncSetupFeedbackRow();
+	if (setupFeedback) settingsView.appendChild(setupFeedback);
 	settingsView.appendChild(
 		buildCheckboxRow(
 			"Encrypt local database at rest (restart required)",
@@ -4339,7 +5026,7 @@ async function openSettings(): Promise<void> {
 
 	settingsView.appendChild(heading("Data", "data export update backup import"));
 	settingsView.appendChild(buildExportRow());
-	settingsView.appendChild(buildConfigBackupRow(current));
+	settingsView.appendChild(buildConfigBackupRow());
 	settingsView.appendChild(await buildUpdatesRow());
 
 	settingsView.hidden = false;
@@ -4347,6 +5034,20 @@ async function openSettings(): Promise<void> {
 	metaBar.hidden = true;
 	detailView.hidden = true;
 	captureRow.hidden = true;
+	const search = settingsView.querySelector<HTMLInputElement>(".settings-search");
+	if (search) {
+		search.value = savedFilter;
+		filterSettings(savedFilter);
+		if (restoreSearchFocus) {
+			requestAnimationFrame(() => {
+				if (!search.isConnected) return;
+				search.focus({ preventScroll: true });
+				if (savedSelectionStart !== null && savedSelectionEnd !== null) {
+					search.setSelectionRange(savedSelectionStart, savedSelectionEnd);
+				}
+			});
+		}
+	}
 	settingsView.scrollTop = savedScroll;
 	if (firstOpen) {
 		requestAnimationFrame(() => settingsView.querySelector<HTMLInputElement>(".settings-search")?.focus());
@@ -4354,6 +5055,7 @@ async function openSettings(): Promise<void> {
 }
 
 function closeSettings(): void {
+	syncSetupFeedback = null;
 	settingsView.hidden = true;
 	list.hidden = false;
 	metaBar.hidden = false;

@@ -5,12 +5,14 @@ import { open } from "@tauri-apps/plugin-shell";
 import {
 	applyListDrag,
 	applySort,
+	buildListTabs,
+	copyableItemText,
 	detectKind,
 	emptyTabCopy,
 	extendRangeByIds,
+	extractTags,
 	filterItems,
 	itemsForTab,
-	LIST_TABS,
 	nextListTab,
 	formatRelativeTime,
 	HELP_SHORTCUTS,
@@ -178,26 +180,59 @@ for (const handle of RESIZE_HANDLES) {
 	surface.appendChild(el);
 }
 
-for (const tab of LIST_TABS) {
-	const btn = document.createElement("button");
-	btn.type = "button";
-	btn.role = "tab";
-	btn.className = "notch-tab";
-	btn.dataset.tab = tab.id;
-	btn.textContent = tab.label;
-	btn.addEventListener("pointerdown", beginDragFrom);
-	btn.addEventListener("click", () => {
-		if (arranging) return;
-		if (currentTab === tab.id) return;
-		currentTab = tab.id;
-		selected = -1;
-		loadedCount = Math.max(itemCount, NOTCH_PAGE_SIZE);
-		multiSelected.clear();
-		selectionAnchorId = null;
-		invalidateFiltered();
-		render();
-	});
-	tabsEl.appendChild(btn);
+const tagFilterBar = document.createElement("div");
+tagFilterBar.className = "tag-filter-bar";
+tagFilterBar.hidden = true;
+list.parentElement!.insertBefore(tagFilterBar, list);
+
+function renderTabs(): void {
+	const tabs = buildListTabs(items, settings?.separate_tag_tabs ?? true);
+	if (!tabs.some((tab) => tab.id === currentTab)) currentTab = "recent";
+
+	tabsEl.innerHTML = "";
+	for (const tab of tabs) {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.role = "tab";
+		btn.className = "notch-tab";
+		btn.dataset.tab = tab.id;
+		btn.textContent = tab.label;
+		btn.setAttribute("aria-selected", String(tab.id === currentTab));
+		btn.addEventListener("pointerdown", beginDragFrom);
+		btn.addEventListener("click", () => {
+			if (arranging) return;
+			if (currentTab === tab.id) return;
+			currentTab = tab.id;
+			selected = -1;
+			loadedCount = Math.max(itemCount, NOTCH_PAGE_SIZE);
+			multiSelected.clear();
+			selectionAnchorId = null;
+			invalidateFiltered();
+			renderTabs();
+			render();
+		});
+		tabsEl.appendChild(btn);
+	}
+
+	tagFilterBar.hidden = currentTab !== "tags";
+	if (currentTab === "tags") {
+		tagFilterBar.innerHTML = "";
+		for (const tag of extractTags(items)) {
+			const pill = document.createElement("button");
+			pill.type = "button";
+			pill.className = "tag-filter-pill";
+			pill.classList.toggle("active", selectedTagFilters.has(tag));
+			pill.textContent = `#${tag}`;
+			pill.onclick = () => {
+				if (selectedTagFilters.has(tag)) selectedTagFilters.delete(tag);
+				else selectedTagFilters.add(tag);
+				invalidateFiltered();
+				renderTabs();
+				render();
+			};
+			tagFilterBar.appendChild(pill);
+		}
+	}
 }
 
 let expanded = false;
@@ -214,6 +249,7 @@ let templatesCache: Template[] = [];
 let customThemesCache: CustomTheme[] = [];
 let settings: Settings | null = null;
 let currentTab: ListTab = "recent";
+let selectedTagFilters = new Set<string>();
 let selected = -1;
 let editingId: string | null = null;
 const multiSelected = new Set<string>();
@@ -239,7 +275,7 @@ const MODE_BADGE_LABELS: Partial<Record<SlashMode["type"], string>> = {
 };
 
 function scopedItems(): Item[] {
-	return itemsForTab(items, currentTab);
+	return itemsForTab(items, currentTab, selectedTagFilters);
 }
 
 function invalidateFiltered(): void {
@@ -342,8 +378,9 @@ async function actOnItem(item: Item): Promise<void> {
 	} else if (item.kind === "image") {
 		await Store.copyImageToClipboard(item.text);
 	} else {
-		await navigator.clipboard.writeText(item.text);
-		await Store.noteOwnClipboardWrite(item.text);
+		const text = copyableItemText(item);
+		await navigator.clipboard.writeText(text);
+		await Store.noteOwnClipboardWrite(text);
 	}
 	await Store.logUsed(item.id);
 }
@@ -374,7 +411,11 @@ function fillMarkdown(target: HTMLElement, text: string): void {
 }
 
 function emptyCopy(): { title: string; body: string } {
-	return emptyTabCopy(currentTab, Boolean(composerInput.value.trim()) && !composerInput.value.startsWith("/"));
+	return emptyTabCopy(
+		currentTab,
+		Boolean(composerInput.value.trim()) && !composerInput.value.startsWith("/"),
+		selectedTagFilters.size,
+	);
 }
 
 async function shareItem(item: Item): Promise<void> {
@@ -433,6 +474,11 @@ async function runNotchChromeAction(item: Item, id: string): Promise<void> {
 		startNotchEdit(item.id);
 		return;
 	}
+	if (id === "open") {
+		if (item.kind !== "link") return;
+		await actOnItem(item);
+		return;
+	}
 	if (id === "share") {
 		await shareItem(item);
 		return;
@@ -461,8 +507,8 @@ async function runNotchChromeAction(item: Item, id: string): Promise<void> {
 		const ordered = items.filter((row) => multiSelected.has(row.id));
 		const joined =
 			id === "copy_selection_plain"
-				? ordered.map((row) => row.text).join("\n")
-				: ordered.map((row, index) => `${index + 1}. ${row.text}`).join("\n");
+				? ordered.map(copyableItemText).join("\n")
+				: ordered.map((row, index) => `${index + 1}. ${copyableItemText(row)}`).join("\n");
 		await navigator.clipboard.writeText(joined);
 		await Store.noteOwnClipboardWrite(joined);
 		for (const row of ordered) await Store.logUsed(row.id);
@@ -788,6 +834,20 @@ function render(): void {
 			thumb.alt = "";
 			thumb.draggable = false;
 			row.appendChild(thumb);
+		} else if (item.kind === "link") {
+			const link = document.createElement("a");
+			link.className = "notch-card-text notch-card-link";
+			link.href = item.text;
+			link.target = "_blank";
+			link.rel = "noopener noreferrer";
+			link.textContent = item.text.split("\n")[0]!.trim() || "(untitled)";
+			link.onclick = (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				if (cardDragging) return;
+				void actOnItem(item);
+			};
+			row.appendChild(link);
 		} else {
 			const label = document.createElement("span");
 			label.className = "notch-card-text";
@@ -807,7 +867,7 @@ function render(): void {
 			(e) => {
 				if (e.button !== 0 || e.altKey) return;
 				if (pointerOnScrollbar(list, e.clientX)) return;
-				if (e.target instanceof Element && e.target.closest(".item-action, .item-edit-input, .notch-card-mark")) return;
+				if (e.target instanceof Element && e.target.closest(".item-action, .item-edit-input, .notch-card-mark, .notch-card-link")) return;
 				e.stopPropagation();
 				pointerOrigin = null;
 				pointerReorder = applyListDrag(null, { type: "down", id: item.id, index, x: e.clientX, y: e.clientY }).state;
@@ -839,7 +899,7 @@ function render(): void {
 		});
 		row.addEventListener("click", (e) => {
 			if (cardDragging || editingId === item.id) return;
-			if (e.target instanceof Element && e.target.closest(".item-action, .notch-card-mark")) return;
+			if (e.target instanceof Element && e.target.closest(".item-action, .notch-card-mark, .notch-card-link")) return;
 			if (e.altKey && item.kind === "image") {
 				e.preventDefault();
 				showImagePreview(item.text);
@@ -967,6 +1027,7 @@ async function refresh(): Promise<void> {
 	root.dataset.edge = edgeFromPosition(nextSettings.dock_position);
 	root.dataset.anchor = anchorFromPosition(nextSettings.dock_position);
 	if (previewSnapshot === null) applyTheme(nextSettings.theme);
+	renderTabs();
 	render();
 }
 void refresh();
@@ -974,6 +1035,7 @@ void refresh();
 listen("refresh", () => void refresh());
 listen<boolean>("dock-set-expanded", (event) => {
 	applyExpanded(event.payload);
+	if (event.payload) void refresh();
 });
 
 async function startResize(dir: ResizeDirection): Promise<void> {
@@ -1015,7 +1077,7 @@ function beginExternalCardDrag(id: string): void {
 	window.setTimeout(() => {
 		cardDragging = false;
 	}, 0);
-	if (current) void Store.startItemDrag(current.kind, current.text);
+	if (current) void Store.startItemDrag(current.kind, copyableItemText(current));
 }
 
 function clearCardMarks(): void {
@@ -1159,12 +1221,14 @@ async function pinComposer(): Promise<void> {
 }
 
 function cycleTab(delta: number): void {
-	currentTab = nextListTab(currentTab, delta);
+	const tabs = buildListTabs(items, settings?.separate_tag_tabs ?? true);
+	currentTab = nextListTab(tabs, currentTab, delta);
 	selected = -1;
 	loadedCount = Math.max(itemCount, NOTCH_PAGE_SIZE);
 	multiSelected.clear();
 	selectionAnchorId = null;
 	invalidateFiltered();
+	renderTabs();
 	render();
 }
 
@@ -1231,8 +1295,9 @@ async function saveComposerText(raw: string, copy = false): Promise<void> {
 	const text = captured.text;
 	const item = await Store.addItem(text, captured.kind ?? detectKind(text));
 	if (copy) {
-		await navigator.clipboard.writeText(text);
-		await Store.noteOwnClipboardWrite(text);
+		const copiedText = copyableItemText({ kind: item.kind, text });
+		await navigator.clipboard.writeText(copiedText);
+		await Store.noteOwnClipboardWrite(copiedText);
 		await Store.logUsed(item.id);
 	}
 	composerInput.value = "";
@@ -1468,6 +1533,11 @@ composerInput.addEventListener("keydown", (e) => {
 	if (modKey && e.key.toLowerCase() === "e" && selected >= 0 && visible[selected] && visible[selected]!.kind !== "image") {
 		e.preventDefault();
 		startNotchEdit(visible[selected]!.id);
+		return;
+	}
+	if (modKey && e.key.toLowerCase() === "o" && selected >= 0 && visible[selected]?.kind === "link") {
+		e.preventDefault();
+		void runNotchChromeAction(visible[selected]!, "open");
 		return;
 	}
 	if (modKey && e.shiftKey && e.key.toLowerCase() === "s" && selected >= 0 && visible[selected]) {
