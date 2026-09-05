@@ -125,6 +125,10 @@ describe("parseUiCommand", () => {
 		expect(parseUiCommand("/settings")).toEqual({ type: "open-settings" });
 	});
 
+	it("recognizes /quit", () => {
+		expect(parseUiCommand("/quit")).toEqual({ type: "quit" });
+	});
+
 	it("runs settings immediately from a highlighted /sett suggestion", () => {
 		expect(slashSuggestionIsImmediate("settings")).toBe(true);
 		expect(slashSuggestionIsImmediate("theme")).toBe(false);

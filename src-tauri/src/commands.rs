@@ -324,6 +324,13 @@ pub fn hide_panel_and_paste(app: AppHandle) {
     crate::panel::hide_and_paste(&app);
 }
 
+/// `/quit`'s backend half — the tray's "Quit" menu item does the same
+/// `app.exit(0)` directly (see tray.rs), but the tray is off by default.
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 /// Lets the settings UI audition a sound/volume combo before saving it,
 /// independent of `notify_sound`/`notification_style` — see `notify::play_sound`.
 #[tauri::command]

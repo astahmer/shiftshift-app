@@ -139,6 +139,7 @@ pub fn run() {
             commands::show_panel,
             commands::save_panel_frame,
             commands::hide_panel_and_paste,
+            commands::quit_app,
             commands::get_sync_status,
             commands::set_settings,
             commands::reset_settings,

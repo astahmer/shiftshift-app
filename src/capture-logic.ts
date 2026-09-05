@@ -46,7 +46,7 @@ export function resolveCapture(raw: string, templates: Template[]): ResolvedCapt
 	return { text: raw, kind: detectKind(raw) };
 }
 
-export type UiCommand = { type: "open-settings" };
+export type UiCommand = { type: "open-settings" } | { type: "quit" };
 
 /**
  * UI-level slash commands that don't create an item — checked before
@@ -58,6 +58,9 @@ export type UiCommand = { type: "open-settings" };
 export function parseUiCommand(raw: string): UiCommand | null {
 	const trimmed = raw.trim();
 	if (trimmed === "/settings") return { type: "open-settings" };
+	// No tray icon by default (see tray.rs) and no dock icon either, so this
+	// is the only discoverable way to quit outright without Activity Monitor.
+	if (trimmed === "/quit") return { type: "quit" };
 	return null;
 }
 
@@ -186,6 +189,7 @@ export const BUILTIN_COMMANDS: Array<{ name: string; hint: string }> = [
 	{ name: "sort", hint: "Change list ordering" },
 	{ name: "history", hint: "Show capture history" },
 	{ name: "help", hint: "Show keyboard shortcuts" },
+	{ name: "quit", hint: "Quit shiftshift" },
 ];
 
 export interface SlashSuggestion {

@@ -346,6 +346,11 @@ export class Store {
 		return invoke("hide_panel_and_paste");
 	}
 
+	/** `/quit` — the only discoverable way to quit outright without the (off-by-default) tray icon or Activity Monitor. */
+	static quitApp(): Promise<void> {
+		return invoke("quit_app");
+	}
+
 	/** The `s3.secret_access_key` field is write-only — see settings.rs's `S3Settings` doc comment. A non-empty value here is stored to the OS keychain and never round-trips back; leave it empty to keep whatever's already set. */
 	static setSettings(settings: Settings): Promise<void> {
 		return invoke("set_settings", { next: settings });
