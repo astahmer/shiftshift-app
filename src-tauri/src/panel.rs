@@ -2,6 +2,8 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 
+use crate::settings::SettingsState;
+
 const PANEL_LABEL: &str = "panel";
 
 /// Whatever app was frontmost right before the panel took focus — restored
@@ -22,8 +24,7 @@ pub fn toggle(app: &AppHandle) {
         hide(app);
     } else {
         remember_frontmost();
-        let _ = window.show();
-        let _ = window.set_focus();
+        activate_and_show(app, &window);
     }
 }
 
@@ -33,10 +34,50 @@ pub fn toggle(app: &AppHandle) {
 pub fn show(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(PANEL_LABEL) {
         remember_frontmost();
-        let _ = window.show();
-        let _ = window.set_focus();
+        activate_and_show(app, &window);
     }
 }
+
+/// `window.show()` + `window.set_focus()` alone make the panel key *within
+/// shiftshift's own app*, but don't reliably make macOS switch which
+/// application is frontmost system-wide when shiftshift is running with no
+/// Dock icon (the default — see `show_in_dock`/`set_dock_visibility`): an
+/// accessory-policy app's `activateIgnoringOtherApps` call can silently fail
+/// to steal focus from whatever app currently has it, verified empirically
+/// (the panel would visibly appear yet the previously frontmost app kept
+/// receiving keystrokes). The fix every Spotlight-alternative launcher
+/// uses: flip to a regular activation policy just long enough to activate,
+/// then flip back — the activation itself sticks even after reverting, so
+/// the Dock icon only exists for the duration of one synchronous call and
+/// the "no Dock icon" preference (whatever it actually is) is preserved.
+///
+/// Don't "simplify" this to a bare `activate_app()`. That was re-measured
+/// after the Input Monitoring and code-signing fixes landed, in case the
+/// flip had only ever been compensating for those: without it, 0 of 3 runs
+/// took focus (the previously frontmost app stayed frontmost and went on
+/// receiving the typed characters), against 3 of 3 with it.
+fn activate_and_show(app: &AppHandle, window: &WebviewWindow) {
+    let restore_to = app.state::<SettingsState>().0.lock().unwrap().show_in_dock;
+    let _ = app.set_dock_visibility(true);
+    activate_app();
+    let _ = window.show();
+    let _ = window.set_focus();
+    let _ = app.set_dock_visibility(restore_to);
+}
+
+/// The actual macOS app-level activation — see `activate_and_show` for why
+/// this alone isn't sufficient without the dock-visibility flip.
+#[cfg(target_os = "macos")]
+fn activate_app() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApp;
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    #[allow(deprecated)]
+    NSApp(mtm).activateIgnoringOtherApps(true);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_app() {}
 
 /// The one place the panel actually gets hidden — both `toggle`'s hide
 /// branch and every frontend-driven hide (Escape, acting on an item, click-
