@@ -63,7 +63,7 @@ export function notchShouldLoadMore(
 	return scrollTop + clientHeight >= scrollHeight - threshold;
 }
 
-export type HoverActionId = "bookmark" | "todo" | "edit" | "share" | "delete";
+export type HoverActionId = "preview" | "bookmark" | "todo" | "edit" | "open" | "share" | "delete";
 
 export interface HoverActionDef {
 	id: HoverActionId;
@@ -74,8 +74,12 @@ export interface HoverActionDef {
 
 export function hoverActionDefs(item: Item): HoverActionDef[] {
 	const actions: HoverActionDef[] = [
+		{ id: "preview", title: "Preview", glyph: "⌕", hint: "⇧→" },
 		{ id: "bookmark", title: "Bookmark", glyph: item.bookmarked ? "★" : "☆", hint: "⌘B" },
 	];
+	if (item.kind === "link") {
+		actions.push({ id: "open", title: "Open externally", glyph: "↗", hint: "⌘O" });
+	}
 	if (item.kind !== "image") {
 		const isTodo = item.kind === "todo";
 		actions.push({
