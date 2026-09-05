@@ -12,8 +12,11 @@ import {
 	formatRelativeTime,
 	isImportableTheme,
 	lastToken,
+	fuzzyMatch,
+	HELP_SHORTCUTS,
 	matchAtSuggestions,
 	matchHashSuggestions,
+	matchHelpEntries,
 	matchSlashSuggestions,
 	matchSortSuggestions,
 	matchThemeSuggestions,
@@ -296,8 +299,33 @@ describe("parseSlashMode", () => {
 		expect(parseSlashMode("/history")).toEqual({ type: "history", query: "" });
 	});
 
-	it("recognizes /help", () => {
-		expect(parseSlashMode("/help")).toEqual({ type: "help" });
+	it("recognizes /help with and without a query", () => {
+		expect(parseSlashMode("/help")).toEqual({ type: "help", query: "" });
+		expect(parseSlashMode("/help tag")).toEqual({ type: "help", query: "tag" });
+	});
+
+	it("fuzzyMatch requires every query character in order, gaps allowed", () => {
+		expect(fuzzyMatch("tg", "Filter/tag by hashtag")?.ranges).toBeTruthy();
+		expect(fuzzyMatch("xyz", "Filter/tag by hashtag")).toBeNull();
+	});
+
+	it("fuzzyMatch's ranges cover exactly the matched characters", () => {
+		expect(fuzzyMatch("tag", "a tag")?.ranges).toEqual([[2, 5]]);
+	});
+
+	it("matchHelpEntries returns everything, unfiltered, for an empty query", () => {
+		expect(matchHelpEntries("").length).toBe(HELP_SHORTCUTS.length);
+	});
+
+	it("matchHelpEntries narrows to entries whose description matches, with highlight ranges", () => {
+		const results = matchHelpEntries("hashtag");
+		expect(results.some((r) => r.description.includes("hashtag"))).toBe(true);
+		expect(results.every((r) => r.description.toLowerCase().includes("hashtag"))).toBe(true);
+		expect(results[0]!.descriptionRanges.length).toBeGreaterThan(0);
+	});
+
+	it("matchHelpEntries returns nothing for a query no description contains", () => {
+		expect(matchHelpEntries("zzzzz")).toEqual([]);
 	});
 
 	it("does not switch modes on a partial word (e.g. /th before /theme)", () => {

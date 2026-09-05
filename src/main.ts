@@ -13,7 +13,6 @@ import {
 	filterItems,
 	findDuplicate,
 	formatRelativeTime,
-	HELP_SHORTCUTS,
 	isImportableTheme,
 	normalizeThemeColors,
 	emptyTabCopy,
@@ -24,6 +23,7 @@ import {
 	nextListTab,
 	matchAtSuggestions,
 	matchHashSuggestions,
+	matchHelpEntries,
 	matchSlashSuggestions,
 	matchSortSuggestions,
 	matchThemeSuggestions,
@@ -41,6 +41,7 @@ import {
 	settingsSearchMatches,
 	SORT_OPTIONS,
 	type ListTab,
+	type MatchedHelpEntry,
 	type SlashMode,
 	type SlashSuggestion,
 	type ThemeChoice,
@@ -706,7 +707,7 @@ function renderSlashSuggestions(raw: string): void {
 	}
 
 	if (mode.type === "help") {
-		renderHelpRows();
+		renderHelpRows(mode.query);
 		return;
 	}
 
@@ -757,14 +758,24 @@ function buildHistoryEntryRow(entry: HistoryEntry): HTMLElement {
 
 let lastHelpCategory = "";
 
-function renderHelpRows(): void {
+function renderHelpRows(query: string): void {
 	lastHelpCategory = "";
-	for (const entry of HELP_SHORTCUTS) list.appendChild(buildHelpRow(entry));
+	const entries = matchHelpEntries(query);
+	if (entries.length === 0) {
+		const empty = document.createElement("div");
+		empty.className = "item-row";
+		empty.textContent = "No matching shortcuts.";
+		list.appendChild(empty);
+		duplicateHint.hidden = true;
+		metaBar.hidden = true;
+		return;
+	}
+	for (const entry of entries) list.appendChild(buildHelpRow(entry));
 	duplicateHint.hidden = true;
 	metaBar.hidden = true;
 }
 
-function buildHelpRow(entry: (typeof HELP_SHORTCUTS)[number]): HTMLElement {
+function buildHelpRow(entry: MatchedHelpEntry): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "item-row help-row";
 	const category = document.createElement("span");
@@ -780,9 +791,27 @@ function buildHelpRow(entry: (typeof HELP_SHORTCUTS)[number]): HTMLElement {
 	row.appendChild(shortcut);
 	const description = document.createElement("span");
 	description.className = "help-description";
-	description.textContent = entry.description;
+	appendHighlighted(description, entry.description, entry.descriptionRanges);
 	row.appendChild(description);
 	return row;
+}
+
+/** Renders `text` into `parent`, wrapping the [start, end) ranges (from a fuzzy match) in a highlight span. */
+function appendHighlighted(parent: HTMLElement, text: string, ranges: Array<[number, number]>): void {
+	if (ranges.length === 0) {
+		parent.textContent = text;
+		return;
+	}
+	let cursor = 0;
+	for (const [start, end] of ranges) {
+		if (start > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, start)));
+		const mark = document.createElement("mark");
+		mark.className = "fuzzy-match";
+		mark.textContent = text.slice(start, end);
+		parent.appendChild(mark);
+		cursor = end;
+	}
+	if (cursor < text.length) parent.appendChild(document.createTextNode(text.slice(cursor)));
 }
 
 function buildSuggestionRow(suggestion: SlashSuggestion, index: number): HTMLElement {

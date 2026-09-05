@@ -213,7 +213,7 @@ export type SlashMode =
 	| { type: "dark" }
 	| { type: "sort"; query: string }
 	| { type: "history"; query: string }
-	| { type: "help" };
+	| { type: "help"; query: string };
 
 /**
  * Which dedicated suggestion view `/`-prefixed input has committed to. Only
@@ -230,7 +230,8 @@ export function parseSlashMode(raw: string): SlashMode {
 	if (sortMatch) return { type: "sort", query: sortMatch[1] ?? "" };
 	const historyMatch = /^\/history(?:\s+(.*))?$/.exec(raw);
 	if (historyMatch) return { type: "history", query: historyMatch[1] ?? "" };
-	if (/^\/help(?:\s|$)/.test(raw)) return { type: "help" };
+	const helpMatch = /^\/help(?:\s+(.*))?$/.exec(raw);
+	if (helpMatch) return { type: "help", query: helpMatch[1] ?? "" };
 	return { type: "commands" };
 }
 
@@ -262,6 +263,54 @@ export const HELP_SHORTCUTS: Array<{ category: string; shortcut: string; descrip
 	{ category: "Filters", shortcut: "#tag", description: "Filter/tag by hashtag" },
 	{ category: "Commands", shortcut: "/theme, /sort, /history, /todo", description: "Type / to see all commands" },
 ];
+
+export interface FuzzyMatch {
+	/** Higher is a tighter/earlier match; used to rank results, not shown to the user. */
+	score: number;
+	/** [start, end) index pairs into the matched string, for highlighting. */
+	ranges: Array<[number, number]>;
+}
+
+/** Subsequence fuzzy match: every character of `query` must appear in `target`, in order, gaps allowed. */
+export function fuzzyMatch(query: string, target: string): FuzzyMatch | null {
+	const q = query.trim().toLowerCase();
+	if (!q) return { score: 0, ranges: [] };
+	const t = target.toLowerCase();
+	const matchedIndices: number[] = [];
+	let qi = 0;
+	for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+		if (t[ti] === q[qi]) {
+			matchedIndices.push(ti);
+			qi++;
+		}
+	}
+	if (qi < q.length) return null;
+	const ranges: Array<[number, number]> = [];
+	for (const idx of matchedIndices) {
+		const last = ranges[ranges.length - 1];
+		if (last && last[1] === idx) last[1] = idx + 1;
+		else ranges.push([idx, idx + 1]);
+	}
+	const span = matchedIndices[matchedIndices.length - 1]! - matchedIndices[0]! + 1;
+	return { score: q.length / span - ranges.length * 0.01, ranges };
+}
+
+export interface MatchedHelpEntry {
+	category: string;
+	shortcut: string;
+	description: string;
+	descriptionRanges: Array<[number, number]>;
+}
+
+/** `/help <query>` narrows the shortcut list to entries whose description fuzzy-matches, best match first. */
+export function matchHelpEntries(query: string): MatchedHelpEntry[] {
+	if (!query.trim()) return HELP_SHORTCUTS.map((entry) => ({ ...entry, descriptionRanges: [] }));
+	const matches = HELP_SHORTCUTS.map((entry) => ({ entry, match: fuzzyMatch(query, entry.description) })).filter(
+		(m): m is { entry: (typeof HELP_SHORTCUTS)[number]; match: FuzzyMatch } => m.match !== null,
+	);
+	matches.sort((a, b) => b.match.score - a.match.score);
+	return matches.map(({ entry, match }) => ({ ...entry, descriptionRanges: match.ranges }));
+}
 
 export interface ThemeChoice {
 	id: string;
