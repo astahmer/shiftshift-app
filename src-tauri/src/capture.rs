@@ -86,10 +86,12 @@ pub(crate) enum Fired {
 /// copy chord.
 static LAST_CAPTURE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
-/// Fingerprint of the last image double-shift saved — the image stays on
-/// the clipboard after a capture, so a second gesture would otherwise
-/// write the same PNG again. Dedicated image shortcut / paste still
-/// always saves (they go through `images::capture_clipboard_image` directly).
+/// Fingerprint of the clipboard image, if any, as of the *previous*
+/// double-shift gesture — not "last saved". An unchanged fingerprint means
+/// the image is stale (already handled, or never actually wanted) and the
+/// gesture should fall through to a normal text capture instead. Dedicated
+/// image shortcut / paste still always saves (they go through
+/// `images::capture_clipboard_image` directly, bypassing this check).
 static LAST_IMAGE_FINGERPRINT: Mutex<Option<u64>> = Mutex::new(None);
 
 /// How long a promotion request still counts as "for that capture" — must
@@ -302,26 +304,38 @@ fn do_capture(app: &AppHandle) -> Result<(), String> {
     // would clobber the image before we could read it. Double-shift with
     // a screenshot already on the clipboard is how people expect this
     // to work; the dedicated image shortcut stays as a fallback.
+    //
+    // Only a *newly appeared* image takes this branch — an image that was
+    // already there on the previous gesture is stale (the clipboard has no
+    // way to signal "the user just selected different text"), so it falls
+    // through to the normal text-copy path instead of silently no-op'ing
+    // every subsequent double-shift until something else overwrites it.
     if let Some(fingerprint) = crate::images::clipboard_image_fingerprint() {
-        if LAST_IMAGE_FINGERPRINT.lock().unwrap().as_ref() == Some(&fingerprint) {
-            return Ok(());
-        }
-        match crate::images::capture_clipboard_image(app) {
-            Ok(_) => {
-                *LAST_IMAGE_FINGERPRINT.lock().unwrap() = Some(fingerprint);
-                let mode = app
-                    .state::<settings::SettingsState>()
-                    .0
-                    .lock()
-                    .unwrap()
-                    .capture_mode;
-                if mode == CaptureMode::Open {
-                    panel::show(app);
+        let mut last_seen = LAST_IMAGE_FINGERPRINT.lock().unwrap();
+        let is_new = last_seen.as_ref() != Some(&fingerprint);
+        *last_seen = Some(fingerprint);
+        drop(last_seen);
+        if is_new {
+            match crate::images::capture_clipboard_image(app) {
+                Ok(_) => {
+                    let mode = app
+                        .state::<settings::SettingsState>()
+                        .0
+                        .lock()
+                        .unwrap()
+                        .capture_mode;
+                    if mode == CaptureMode::Open {
+                        panel::show(app);
+                    }
+                    return Ok(());
                 }
-                return Ok(());
+                Err(e) => return Err(e),
             }
-            Err(e) => return Err(e),
         }
+    } else {
+        // Nothing on the clipboard right now — forget what we last saw, so a
+        // later re-copy of that same image is treated as fresh again.
+        *LAST_IMAGE_FINGERPRINT.lock().unwrap() = None;
     }
 
     // Read before the copy chord fires — the frontmost app shouldn't change
