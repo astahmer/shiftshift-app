@@ -151,29 +151,42 @@ duplicateHint.hidden = true;
 duplicateHint.textContent = "Already saved — Enter adds it again";
 app.appendChild(duplicateHint);
 
-// First-run/ongoing guide: double-Shift capture needs Accessibility access
-// on macOS (a no-op check on other platforms, see accessibility_trusted) —
-// walks the user to the right System Settings pane instead of leaving them
-// to discover the permission themselves, cooper-style. Re-checks on an
-// interval so it clears itself the moment the box gets ticked — macOS
-// applies that instantly, no relaunch needed.
+// First-run/ongoing guide: double-Shift capture needs *two* separate macOS
+// permissions (both no-op checks on other platforms) — Input Monitoring is
+// what actually lets the tap read keystrokes from other apps, and
+// Accessibility is what lets the panel take focus. Granting only one leaves
+// the gesture silently dead, so the banner names whichever is missing and
+// opens that exact pane rather than a generic "grant access" nudge.
+// Re-checks on an interval so it clears itself once the box is ticked.
 const permissionBanner = document.createElement("div");
 permissionBanner.className = "permission-banner";
 permissionBanner.hidden = true;
 const permissionText = document.createElement("span");
-permissionText.textContent = "Double-Shift capture is inactive — grant Accessibility access to enable it.";
 permissionBanner.appendChild(permissionText);
 const permissionBtn = document.createElement("button");
 permissionBtn.textContent = "Open Settings";
-permissionBtn.onclick = () => void Store.openAccessibilitySettings();
 permissionBanner.appendChild(permissionBtn);
 app.appendChild(permissionBanner);
 
 let permissionCheckTimer: ReturnType<typeof setInterval> | undefined;
 async function checkAccessibilityPermission(): Promise<void> {
-	const trusted = await Store.accessibilityTrusted();
-	permissionBanner.hidden = trusted;
-	if (trusted) {
+	const [trusted, inputMonitoring] = await Promise.all([
+		Store.accessibilityTrusted(),
+		Store.inputMonitoringGranted(),
+	]);
+	const ok = trusted && inputMonitoring;
+	permissionBanner.hidden = ok;
+	if (!ok) {
+		// Input Monitoring first: it's the one that gates the gesture itself,
+		// and it's the easier of the two to have missed since nothing
+		// prompts for it the way Accessibility does.
+		const missing = !inputMonitoring ? "Input Monitoring" : "Accessibility";
+		permissionText.textContent = `Double-Shift capture is inactive — grant ${missing} access to enable it.`;
+		permissionBtn.onclick = !inputMonitoring
+			? () => void Store.openInputMonitoringSettings()
+			: () => void Store.openAccessibilitySettings();
+	}
+	if (ok) {
 		clearInterval(permissionCheckTimer);
 		permissionCheckTimer = undefined;
 	} else if (!permissionCheckTimer) {
@@ -2416,21 +2429,25 @@ const ACTION_LABELS: Record<Action, string> = {
 	none: "Do nothing",
 };
 
-/** Mirrors the in-panel banner (see `checkAccessibilityPermission`) for anyone who wants to check without hunting — a no-op on non-mac, where `trusted` is always true. */
-function buildAccessibilityStatusRow(trusted: boolean): HTMLElement {
+/** Mirrors the in-panel banner (see `checkAccessibilityPermission`) for anyone who wants to check without hunting — a no-op on non-mac, where both are always true. */
+function buildPermissionStatusRow(
+	label: string,
+	granted: boolean,
+	openSettings: () => void,
+): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "settings-row";
-	const label = document.createElement("label");
-	label.textContent = "Accessibility access";
-	row.appendChild(label);
+	const name = document.createElement("label");
+	name.textContent = label;
+	row.appendChild(name);
 	const status = document.createElement("span");
 	status.className = "settings-readout";
-	status.textContent = trusted ? "Granted" : "Not granted";
+	status.textContent = granted ? "Granted" : "Not granted";
 	row.appendChild(status);
-	if (!trusted) {
+	if (!granted) {
 		const fixBtn = document.createElement("button");
 		fixBtn.textContent = "Open Settings";
-		fixBtn.onclick = () => void Store.openAccessibilitySettings();
+		fixBtn.onclick = openSettings;
 		row.appendChild(fixBtn);
 	}
 	return row;
@@ -4221,11 +4238,12 @@ function buildSyncStatusRow(status: SyncStatus): HTMLElement {
 async function openSettings(): Promise<void> {
 	const firstOpen = settingsView.hidden;
 	const savedScroll = firstOpen ? 0 : settingsView.scrollTop;
-	const [current, templates, syncStatus, accessibilityTrusted] = await Promise.all([
+	const [current, templates, syncStatus, accessibilityTrusted, inputMonitoringGranted] = await Promise.all([
 		loadSettings(),
 		Store.listTemplates(),
 		Store.getSyncStatus(),
 		Store.accessibilityTrusted(),
+		Store.inputMonitoringGranted(),
 	]);
 	settingsView.innerHTML = "";
 	settingsView.appendChild(buildSettingsNav());
@@ -4263,7 +4281,16 @@ async function openSettings(): Promise<void> {
 	for (const row of buildVisibilityRows(current)) settingsView.appendChild(row);
 
 	settingsView.appendChild(heading("Double-shift bindings", "key shortcut binding shift tap hotkey"));
-	settingsView.appendChild(buildAccessibilityStatusRow(accessibilityTrusted));
+	settingsView.appendChild(
+		buildPermissionStatusRow("Input Monitoring", inputMonitoringGranted, () =>
+			void Store.openInputMonitoringSettings(),
+		),
+	);
+	settingsView.appendChild(
+		buildPermissionStatusRow("Accessibility access", accessibilityTrusted, () =>
+			void Store.openAccessibilitySettings(),
+		),
+	);
 	settingsView.appendChild(buildBindingRow("Left Shift", "left", current));
 	settingsView.appendChild(buildBindingRow("Right Shift", "right", current));
 

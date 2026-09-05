@@ -309,6 +309,15 @@ export class Store {
 		return invoke("open_accessibility_settings");
 	}
 
+	/** Separate permission from Accessibility, and the one a keystroke tap actually needs — always `true` on non-mac. */
+	static inputMonitoringGranted(): Promise<boolean> {
+		return invoke("input_monitoring_granted");
+	}
+
+	static openInputMonitoringSettings(): Promise<void> {
+		return invoke("open_input_monitoring_settings");
+	}
+
 	/** Reveals a file in Finder — used for "Share" on image items, since Finder's own Share button has full AirDrop/Mail/Messages access that a spawned process doesn't. */
 	static revealInFinder(path: string): Promise<void> {
 		return invoke("reveal_in_finder", { path });

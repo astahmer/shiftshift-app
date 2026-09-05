@@ -5,10 +5,28 @@
 //! Telling the two Shift keys apart only needs the modifier flag bits, so
 //! this tap never touches those APIs.
 //!
-//! The tap needs Accessibility permission. An unauthorised tap does not fail
-//! loudly — it hands back a live-looking port with its mask silently
-//! stripped — so viability is judged by `CGEventTapIsEnabled`, not by
-//! getting a handle back.
+//! The tap needs **Input Monitoring** (`kTCCServiceListenEvent`) — not
+//! Accessibility, which is a different permission and is only what lets the
+//! panel take focus afterwards. Granting Accessibility alone leaves the
+//! gesture completely dead while every check that looks at
+//! `AXIsProcessTrusted` cheerfully reports "granted", which is a deeply
+//! misleading place to end up; see `input_monitoring_granted`.
+//!
+//! An unauthorised tap does not fail loudly — it hands back a live-looking
+//! port with its mask silently stripped — so viability is judged by
+//! `CGEventTapIsEnabled`, not by getting a handle back.
+//!
+//! Note also that running the binary straight from a terminal masks all of
+//! this: the responsible process is then the terminal, so the tap inherits
+//! whatever permissions *it* has and works even when the app bundle's own
+//! grants are missing.
+//!
+//! `pnpm tauri dev` is exactly that case — it runs `target/debug` as a child
+//! of your terminal — so it can never surface a missing permission here, and
+//! neither can `cargo run` or launching the bundle's binary by path. Verify
+//! anything permission-sensitive against the installed .app launched the
+//! normal way (Finder/Spotlight/`open -a`); that is the only path that
+//! exercises the bundle's own TCC identity.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -52,6 +70,34 @@ extern "C" {
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> c_uchar;
+}
+
+// Listening to keystrokes from other apps is gated by Input Monitoring
+// (`kTCCServiceListenEvent`), which is a *separate* permission from
+// Accessibility — `AXIsProcessTrusted` says nothing about it. Without it
+// `CGEventTap::new` still hands back a live-looking port whose mask has
+// been silently stripped, which is exactly the "tap would not arm despite
+// Accessibility being granted" case.
+#[link(name = "IOKit", kind = "framework")]
+extern "C" {
+    fn IOHIDCheckAccess(request: u32) -> u32;
+    fn IOHIDRequestAccess(request: u32) -> bool;
+}
+
+const KIOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+const KIOHID_ACCESS_TYPE_GRANTED: u32 = 0;
+
+/// Whether Input Monitoring is granted. Also see `request_input_monitoring`,
+/// which is what actually puts the app in the System Settings list.
+pub fn input_monitoring_granted() -> bool {
+    unsafe { IOHIDCheckAccess(KIOHID_REQUEST_TYPE_LISTEN_EVENT) == KIOHID_ACCESS_TYPE_GRANTED }
+}
+
+/// Prompts for Input Monitoring the first time, and — importantly — makes
+/// macOS create the app's row in System Settings so the checkbox is there
+/// to tick, mirroring what `AXIsProcessTrusted` does for Accessibility.
+pub fn request_input_monitoring() -> bool {
+    unsafe { IOHIDRequestAccess(KIOHID_REQUEST_TYPE_LISTEN_EVENT) }
 }
 
 static TAP_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -191,7 +237,20 @@ fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
                         bindings,
                     ) {
                         Fired::Action(Action::Capture) => capture::capture_selection(&app_cb),
-                        Fired::Action(Action::TogglePanel) => panel::toggle(&app_cb),
+                        // `panel::toggle` shows/focuses a window — running it inline on
+                        // this callback risks macOS's CGEventTap watchdog disabling the
+                        // tap (`TapDisabledByTimeout`) before it returns, but a plain
+                        // spawned thread isn't the fix either: stealing focus from
+                        // whatever app is currently frontmost is an AppKit operation
+                        // that's unreliable off the main thread (it can silently fail
+                        // to activate instead of erroring). `run_on_main_thread` just
+                        // enqueues the closure and returns immediately, so the tap
+                        // callback stays fast *and* the actual window activation runs
+                        // on the thread that can actually do it.
+                        Fired::Action(Action::TogglePanel) => {
+                            let app = app_cb.clone();
+                            let _ = app_cb.run_on_main_thread(move || panel::toggle(&app));
+                        }
                         Fired::Action(Action::None) | Fired::Nothing => {}
                         Fired::PromoteToTodo(gesture_at) => {
                             capture::promote_last_capture_to_todo(&app_cb, gesture_at)
@@ -214,11 +273,16 @@ fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
     CFRunLoop::get_current().add_source(&source, unsafe { kCFRunLoopCommonModes });
     tap.enable();
 
+    // Input Monitoring is checked first and named explicitly: it's the one
+    // that actually gates a keystroke tap, it's a different permission from
+    // Accessibility, and an earlier version of this message only mentioned
+    // Accessibility — which reads as "permissions are fine, something else
+    // is broken" and sends you looking in entirely the wrong place.
     if !unsafe { CGEventTapIsEnabled(port_ref) } {
-        return Err(if is_trusted() {
-            "the event tap would not arm despite Accessibility being granted"
-        } else {
-            "Accessibility not granted"
+        return Err(match (input_monitoring_granted(), is_trusted()) {
+            (false, _) => "Input Monitoring not granted (System Settings > Privacy & Security > Input Monitoring) — this is separate from Accessibility, and it is what a keystroke tap needs",
+            (true, false) => "Accessibility not granted",
+            (true, true) => "the event tap would not arm even though Input Monitoring and Accessibility are both granted",
         });
     }
 
@@ -235,6 +299,10 @@ fn run_tap(app: &AppHandle) -> Result<(), &'static str> {
 /// work regardless.
 pub fn start(app: AppHandle) {
     let _ = is_trusted();
+    // Also puts the app in the Input Monitoring list so there's a checkbox
+    // to tick — without this the row never appears and the permission is
+    // undiscoverable.
+    let _ = request_input_monitoring();
     std::thread::spawn(move || {
         let mut reported: Option<&'static str> = None;
         loop {

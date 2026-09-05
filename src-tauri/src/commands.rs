@@ -258,6 +258,39 @@ pub fn open_accessibility_settings() -> Result<(), String> {
     Err("not applicable on this platform".to_string())
 }
 
+/// Input Monitoring is a *separate* permission from Accessibility and is the
+/// one that actually lets the double-Shift tap read keystrokes from other
+/// apps — Accessibility alone leaves the tap silently inert. Surfaced
+/// alongside `accessibility_trusted` so the UI can tell you which of the two
+/// is missing instead of just failing quietly.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn input_monitoring_granted() -> bool {
+    crate::mac_tap::input_monitoring_granted()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn input_monitoring_granted() -> bool {
+    true
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn open_input_monitoring_settings() -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn open_input_monitoring_settings() -> Result<(), String> {
+    Err("not applicable on this platform".to_string())
+}
+
 #[derive(serde::Serialize)]
 pub struct SyncStatus {
     /// "local" | "s3" | "folder" — what's actually in use right now, which

@@ -134,6 +134,8 @@ pub fn run() {
             commands::preview_file,
             commands::accessibility_trusted,
             commands::open_accessibility_settings,
+            commands::input_monitoring_granted,
+            commands::open_input_monitoring_settings,
             commands::get_settings,
             commands::hide_panel,
             commands::show_panel,
