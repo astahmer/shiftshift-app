@@ -1199,6 +1199,10 @@ async function handleNotchSlashEnter(raw: string): Promise<void> {
 		await emit("open-settings");
 		return;
 	}
+	if (uiCommand?.type === "quit") {
+		await Store.quitApp();
+		return;
+	}
 	const suggestions = matchSlashSuggestions(raw, templatesCache);
 	const typedName = (raw.slice(1).split(/\s+/)[0] ?? "").toLowerCase();
 	const exactMatch = suggestions.some((s) => s.name.toLowerCase() === typedName);
