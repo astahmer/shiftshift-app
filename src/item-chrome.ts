@@ -210,15 +210,26 @@ export function openItemContextMenu(event: MouseEvent, entries: ContextEntry[], 
 		if (next instanceof MouseEvent && menu.contains(next.target as Node)) return;
 		closeItemContextMenu();
 		window.removeEventListener("pointerdown", dismiss, true);
-		window.removeEventListener("keydown", onKey);
+		window.removeEventListener("keydown", onKey, true);
 		window.removeEventListener("blur", dismiss);
 	};
 	const onKey = (next: KeyboardEvent): void => {
+		// Swallow every key while the menu is open, not just Escape — this
+		// menu doesn't offer its own arrow/Enter navigation, so without this
+		// those keys fell straight through to the list underneath (moving
+		// its selection, or triggering its own Enter-on-highlighted-item
+		// behavior) while the menu stayed visibly open on top. Capture
+		// phase, same as the pointerdown dismiss listener just below:
+		// nothing in this menu takes focus, so the key event's real target
+		// stays whatever had focus before the right-click — a bubble-phase
+		// listener here would run *after* the list's own document-level
+		// handler, not before it.
+		next.stopPropagation();
 		if (next.key === "Escape") dismiss(next);
 	};
 	queueMicrotask(() => {
 		window.addEventListener("pointerdown", dismiss, true);
-		window.addEventListener("keydown", onKey);
+		window.addEventListener("keydown", onKey, true);
 		window.addEventListener("blur", dismiss);
 	});
 }
@@ -311,6 +322,14 @@ export function openCommandPalette(entries: ContextEntry[], onPick: (id: string)
 
 	search.oninput = filter;
 	search.onkeydown = (e) => {
+		// The search input holds focus while the palette is open, so it's
+		// the actual event target — stopping it here (unlike the plain
+		// context menu's dismiss listener above) is enough on its own, no
+		// capture phase needed. Without this, preventDefault() alone left
+		// every one of these keys *also* reaching the list underneath:
+		// arrows moved its selection, and Enter acted on its highlighted
+		// item (typically hiding the panel) while the palette stayed open.
+		e.stopPropagation();
 		if (e.key === "ArrowDown") {
 			e.preventDefault();
 			activeIndex = Math.min(activeIndex + 1, shown.length - 1);
