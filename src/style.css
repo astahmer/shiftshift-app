@@ -2092,6 +2092,50 @@ button:active {
 	font-size: 12px;
 }
 
+.tag-prompt-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 90;
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+	padding-top: 18vh;
+}
+
+.tag-prompt {
+	width: min(320px, 80vw);
+	padding: 10px;
+	border-radius: 12px;
+	background: color-mix(in srgb, var(--bg) 92%, transparent);
+	backdrop-filter: blur(18px) saturate(140%);
+	-webkit-backdrop-filter: blur(18px) saturate(140%);
+	box-shadow:
+		0 0 0 1px color-mix(in srgb, var(--fg) 12%, transparent),
+		0 16px 40px color-mix(in srgb, #000 28%, transparent);
+}
+
+.tag-prompt-label {
+	margin: 2px 4px 8px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.tag-prompt-input {
+	width: 100%;
+	padding: 8px 10px;
+	border: none;
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	font: inherit;
+	font-size: 13px;
+}
+
+.tag-prompt-input:focus {
+	outline: none;
+	box-shadow: 0 0 0 1.5px var(--accent);
+}
+
 /* Shortcut hints (like shiftshift's help footer, but inline on the row):
    only shown once a row is the keyboard cursor, not on plain mouse hover,
    so the mouse-only list stays uncluttered. Rendered as a small "key cap"

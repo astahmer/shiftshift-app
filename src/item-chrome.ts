@@ -348,3 +348,68 @@ export function openCommandPalette(entries: ContextEntry[], onPick: (id: string)
 		window.addEventListener("blur", close);
 	});
 }
+
+let openTagPrompt: HTMLElement | null = null;
+
+export function closeTagPrompt(): void {
+	openTagPrompt?.remove();
+	openTagPrompt = null;
+}
+
+/**
+ * A single-line, in-app text prompt for "Tag selected...". `window.prompt`
+ * doesn't reliably work in this webview (native dialogs aren't fully
+ * supported here — see the "Tag selected" bug report) and even where it
+ * does render, its input isn't ours to configure, so its spellcheck/
+ * autocorrect can't be turned off the way every other input in this app
+ * has it turned off.
+ */
+export function promptForTag(label: string, onSubmit: (value: string) => void): void {
+	closeItemContextMenu();
+	closeCommandPalette();
+	closeTagPrompt();
+
+	const overlay = document.createElement("div");
+	overlay.className = "tag-prompt-overlay";
+	const box = document.createElement("div");
+	box.className = "tag-prompt";
+	overlay.appendChild(box);
+
+	const labelEl = document.createElement("div");
+	labelEl.className = "tag-prompt-label";
+	labelEl.textContent = label;
+	box.appendChild(labelEl);
+
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "tag-prompt-input";
+	input.placeholder = "tag-name";
+	input.spellcheck = false;
+	input.setAttribute("autocorrect", "off");
+	input.setAttribute("autocapitalize", "off");
+	box.appendChild(input);
+
+	function close(): void {
+		closeTagPrompt();
+		window.removeEventListener("pointerdown", dismiss, true);
+	}
+	const dismiss = (next: Event): void => {
+		if (next instanceof MouseEvent && box.contains(next.target as Node)) return;
+		close();
+	};
+	input.onkeydown = (e) => {
+		e.stopPropagation();
+		if (e.key === "Enter") {
+			const value = input.value.trim();
+			close();
+			if (value) onSubmit(value);
+		} else if (e.key === "Escape") {
+			close();
+		}
+	};
+
+	document.body.appendChild(overlay);
+	openTagPrompt = overlay;
+	input.focus();
+	queueMicrotask(() => window.addEventListener("pointerdown", dismiss, true));
+}

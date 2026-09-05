@@ -56,6 +56,7 @@ import {
 	notchShouldLoadMore,
 	openCommandPalette,
 	openItemContextMenu,
+	promptForTag,
 	pointerOnScrollbar,
 	stepLoadedSelection,
 } from "./item-chrome";
@@ -1277,7 +1278,7 @@ async function runItemChromeAction(item: Item, id: string): Promise<void> {
 		return;
 	}
 	if (id === "tag_selection") {
-		await bulkAddTag();
+		bulkAddTag();
 	}
 }
 
@@ -1474,10 +1475,16 @@ async function bulkToggleTodo(): Promise<void> {
 }
 
 /** Appends the same `#tag` to every multi-selected item's text — the bulk counterpart of the detail view's single-item "Add a tag". */
-async function bulkAddTag(): Promise<void> {
+function bulkAddTag(): void {
 	const selected = items.filter((item) => multiSelected.has(item.id));
 	if (selected.length === 0) return;
-	const clean = normalizeTagInput(window.prompt(`Tag ${selected.length} item${selected.length === 1 ? "" : "s"} with:`) ?? "");
+	promptForTag(`Tag ${selected.length} item${selected.length === 1 ? "" : "s"} with:`, (raw) => {
+		void applyBulkTag(selected, raw);
+	});
+}
+
+async function applyBulkTag(selected: Item[], raw: string): Promise<void> {
+	const clean = normalizeTagInput(raw);
 	if (!clean) return;
 	const entries: UndoEntry[] = [];
 	for (const item of selected) {
@@ -1585,6 +1592,9 @@ function buildDetailTags(item: Item): HTMLElement {
 	addRow.className = "detail-add-tag";
 	const tagInput = document.createElement("input");
 	tagInput.placeholder = "Add a tag";
+	tagInput.spellcheck = false;
+	tagInput.setAttribute("autocorrect", "off");
+	tagInput.setAttribute("autocapitalize", "off");
 	// Native <datalist> autocomplete against tags already in use elsewhere —
 	// avoids accidentally forking "work" vs "worklife" by typo, matching the
 	// `#` suggestion mode's tag source.
