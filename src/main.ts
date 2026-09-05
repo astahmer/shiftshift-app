@@ -1048,7 +1048,8 @@ function buildRow(item: Item, index: number): HTMLElement {
 			(e) => {
 				if (e.button !== 0 || e.altKey) return;
 				if (pointerOnScrollbar(list, e.clientX)) return;
-				if (e.target instanceof Element && e.target.closest(".item-check, .item-edit-input")) return;
+				if (e.target instanceof Element && e.target.closest(".item-check, .item-edit-input, .item-actions"))
+					return;
 				pointerReorder = applyListDrag(null, { type: "down", id: item.id, index, x: e.clientX, y: e.clientY }).state;
 				try {
 					row.setPointerCapture(e.pointerId);
