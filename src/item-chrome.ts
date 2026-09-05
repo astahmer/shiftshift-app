@@ -429,6 +429,10 @@ export function promptForTag(label: string, onSubmit: (value: string) => void): 
 
 	document.body.appendChild(overlay);
 	openTagPrompt = overlay;
-	input.focus();
+	// WebKit only honors spellcheck/autocorrect="off" if they're already on
+	// the node when it establishes the input's text-replacement session;
+	// focusing in the same tick as the attributes are set (and the node is
+	// inserted) races that and loses, showing the native suggestion bubble.
+	requestAnimationFrame(() => input.focus());
 	queueMicrotask(() => window.addEventListener("pointerdown", dismiss, true));
 }
