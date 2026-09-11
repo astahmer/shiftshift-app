@@ -93,7 +93,7 @@ pub fn run() {
 
             if let Some(panel) = app.get_webview_window("panel") {
                 vibrancy::apply(&panel);
-                panel::apply_saved_frame(
+                let repaired = panel::apply_saved_frame(
                     &panel,
                     panel_width,
                     panel_height,
@@ -101,6 +101,23 @@ pub fn run() {
                     panel_y,
                     panel_placed,
                 );
+                if panel_placed {
+                    if repaired.width != panel_width
+                        || repaired.height != panel_height
+                        || repaired.x != panel_x
+                        || repaired.y != panel_y
+                    {
+                        let state = app.state::<settings::SettingsState>();
+                        let mut live = state.0.lock().unwrap();
+                        live.panel_width = repaired.width;
+                        live.panel_height = repaired.height;
+                        live.panel_x = repaired.x;
+                        live.panel_y = repaired.y;
+                        if let Err(error) = settings::save(&app_data_dir, &live) {
+                            eprintln!("shiftshift: could not repair saved panel frame: {error}");
+                        }
+                    }
+                }
             }
             dock::apply_enabled(&handle, dock_enabled);
 

@@ -5079,6 +5079,7 @@ settingsBtn.onclick = () => {
 
 void loadSettings();
 void refresh();
+window.dispatchEvent(new Event("shiftshift-ready"));
 
 // A misconfigured S3/folder backend used to fail completely silently — an
 // eprintln! to a terminal nobody's watching, with the UI just quietly using

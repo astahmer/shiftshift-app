@@ -2,11 +2,26 @@ use std::sync::Mutex;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewWindow};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
+};
 
 use crate::settings::SettingsState;
 
 const PANEL_LABEL: &str = "panel";
+const MIN_PANEL_WIDTH: u32 = 320;
+const MIN_PANEL_HEIGHT: u32 = 200;
+const MAX_PANEL_WIDTH: u32 = 1200;
+const MAX_PANEL_HEIGHT: u32 = 900;
+const PANEL_EDGE_MARGIN: u32 = 24;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PanelFrame {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+}
 
 /// Whatever app was frontmost right before the panel took focus — restored
 /// on hide (see `hide`/`restore_previous_focus`) so summoning shiftshift to
@@ -126,19 +141,96 @@ pub fn hide(app: &AppHandle) {
 /// Restores a user-resized/dragged frame. Size applies whenever it looks
 /// like a real window (not the unset 0×0 default); position only after the
 /// user has actually placed the panel once (`placed`).
-pub fn apply_saved_frame(
+pub(crate) fn apply_saved_frame(
     window: &WebviewWindow,
     width: u32,
     height: u32,
     x: i32,
     y: i32,
     placed: bool,
-) {
-    if width >= 320 && height >= 200 {
-        let _ = window.set_size(LogicalSize::new(width as f64, height as f64));
+) -> PanelFrame {
+    let frame = clamp_frame_for_window(
+        window,
+        PanelFrame {
+            width,
+            height,
+            x,
+            y,
+        },
+    );
+    if frame.width >= MIN_PANEL_WIDTH && frame.height >= MIN_PANEL_HEIGHT {
+        let _ = window.set_size(LogicalSize::new(frame.width as f64, frame.height as f64));
     }
     if placed {
-        let _ = window.set_position(LogicalPosition::new(x as f64, y as f64));
+        let _ = window.set_position(LogicalPosition::new(frame.x as f64, frame.y as f64));
+    }
+    frame
+}
+
+pub(crate) fn clamp_frame_for_window(window: &WebviewWindow, frame: PanelFrame) -> PanelFrame {
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return frame;
+    };
+    clamp_frame(
+        frame,
+        *monitor.position(),
+        *monitor.size(),
+        monitor.scale_factor(),
+    )
+}
+
+fn clamp_frame(
+    frame: PanelFrame,
+    monitor_position: PhysicalPosition<i32>,
+    monitor_size: PhysicalSize<u32>,
+    scale_factor: f64,
+) -> PanelFrame {
+    if frame.width < MIN_PANEL_WIDTH || frame.height < MIN_PANEL_HEIGHT {
+        return frame;
+    }
+
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    let monitor_x = (f64::from(monitor_position.x) / scale).round() as i32;
+    let monitor_y = (f64::from(monitor_position.y) / scale).round() as i32;
+    let monitor_width = (f64::from(monitor_size.width) / scale).floor() as u32;
+    let monitor_height = (f64::from(monitor_size.height) / scale).floor() as u32;
+    let max_width = monitor_width
+        .saturating_sub(PANEL_EDGE_MARGIN * 2)
+        .max(MIN_PANEL_WIDTH)
+        .min(MAX_PANEL_WIDTH);
+    let max_height = monitor_height
+        .saturating_sub(PANEL_EDGE_MARGIN * 2)
+        .max(MIN_PANEL_HEIGHT)
+        .min(MAX_PANEL_HEIGHT);
+    let width = frame.width.min(max_width);
+    let height = frame.height.min(max_height);
+    let min_x = monitor_x + PANEL_EDGE_MARGIN as i32;
+    let min_y = monitor_y + PANEL_EDGE_MARGIN as i32;
+    let max_x = monitor_x + monitor_width as i32 - PANEL_EDGE_MARGIN as i32 - width as i32;
+    let max_y = monitor_y + monitor_height as i32 - PANEL_EDGE_MARGIN as i32 - height as i32;
+
+    PanelFrame {
+        width,
+        height,
+        x: if max_x >= min_x {
+            frame.x.clamp(min_x, max_x)
+        } else {
+            monitor_x
+        },
+        y: if max_y >= min_y {
+            frame.y.clamp(min_y, max_y)
+        } else {
+            monitor_y
+        },
     }
 }
 
@@ -176,10 +268,81 @@ fn build_activate_script(name: &str) -> String {
     format!(r#"tell application "System Events" to set frontmost of process "{escaped}" to true"#)
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn clamp_frame_limits_oversized_frame_and_keeps_edges_visible() {
+        let frame = clamp_frame(
+            PanelFrame {
+                width: 1900,
+                height: 1000,
+                x: 0,
+                y: 0,
+            },
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(1920, 1080),
+            1.0,
+        );
+
+        assert_eq!(
+            frame,
+            PanelFrame {
+                width: 1200,
+                height: 900,
+                x: 24,
+                y: 24,
+            }
+        );
+    }
+
+    #[test]
+    fn clamp_frame_uses_logical_dimensions_on_retina_displays() {
+        let frame = clamp_frame(
+            PanelFrame {
+                width: 1400,
+                height: 950,
+                x: 1400,
+                y: 900,
+            },
+            PhysicalPosition::new(0, 0),
+            PhysicalSize::new(3024, 1964),
+            2.0,
+        );
+
+        assert_eq!(
+            frame,
+            PanelFrame {
+                width: 1200,
+                height: 900,
+                x: 288,
+                y: 58,
+            }
+        );
+    }
+
+    #[test]
+    fn clamp_frame_leaves_unset_size_untouched() {
+        let frame = PanelFrame {
+            width: 0,
+            height: 0,
+            x: -400,
+            y: -200,
+        };
+
+        assert_eq!(
+            clamp_frame(
+                frame,
+                PhysicalPosition::new(0, 0),
+                PhysicalSize::new(1920, 1080),
+                1.0,
+            ),
+            frame
+        );
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn build_activate_script_escapes_quotes_and_backslashes() {
         let script = build_activate_script(r#"Weird "App" \ Name"#);
