@@ -48,7 +48,11 @@ pub fn apply_dock_visibility(app: &AppHandle, visible: bool) {
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(1_100));
             let show_in_dock = app.state::<SettingsState>().0.lock().unwrap().show_in_dock;
-            if !show_in_dock {
+            let panel_visible = app
+                .get_webview_window(PANEL_LABEL)
+                .and_then(|window| window.is_visible().ok())
+                .unwrap_or(false);
+            if should_hide_dock(show_in_dock, panel_visible) {
                 let _ = app.set_dock_visibility(false);
             }
         });
@@ -99,14 +103,10 @@ pub fn show(app: &AppHandle) {
 /// took focus (the previously frontmost app stayed frontmost and went on
 /// receiving the typed characters), against 3 of 3 with it.
 fn activate_and_show(app: &AppHandle, window: &WebviewWindow) {
-    let restore_to = app.state::<SettingsState>().0.lock().unwrap().show_in_dock;
     apply_dock_visibility(app, true);
     activate_app();
     let _ = window.show();
     let _ = window.set_focus();
-    if !restore_to {
-        apply_dock_visibility(app, false);
-    }
 }
 
 /// The actual macOS app-level activation — see `activate_and_show` for why
@@ -131,7 +131,12 @@ pub fn hide(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(PANEL_LABEL) {
         let _ = window.hide();
     }
+    apply_dock_visibility(app, false);
     restore_previous_focus();
+}
+
+fn should_hide_dock(show_in_dock: bool, panel_visible: bool) -> bool {
+    !show_in_dock && !panel_visible
 }
 
 /// Hide, hand focus back, then paste — the default highlighted-item Enter
@@ -271,6 +276,13 @@ fn build_activate_script(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dock_stays_visible_while_panel_is_open() {
+        assert!(!should_hide_dock(false, true));
+        assert!(!should_hide_dock(true, false));
+        assert!(should_hide_dock(false, false));
+    }
 
     #[test]
     fn clamp_frame_limits_oversized_frame_and_keeps_edges_visible() {
