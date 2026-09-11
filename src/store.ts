@@ -271,6 +271,18 @@ export interface SyncStatus {
 	fallback_reason: string | null;
 }
 
+export interface IcloudFolderSetup {
+	path: string;
+	merge: {
+		items_added: number;
+		items_existing: number;
+		history_added: number;
+		history_existing: number;
+		collections_added: number;
+		collections_existing: number;
+	};
+}
+
 /**
  * Thin RPC boundary over the Rust `Store` port (see src-tauri/src/store/mod.rs).
  * The frontend only ever talks to the active backend through these commands —
@@ -369,7 +381,7 @@ export class Store {
 		return invoke("fetch_link_preview", { url });
 	}
 
-	static prepareIcloudFolder(): Promise<string> {
+	static prepareIcloudFolder(): Promise<IcloudFolderSetup> {
 		return invoke("prepare_icloud_folder");
 	}
 

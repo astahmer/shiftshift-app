@@ -4342,14 +4342,18 @@ function buildSyncRows(current: Settings): HTMLElement[] {
 			icloudBtn.disabled = true;
 			icloudBtn.textContent = "Creating folder…";
 			try {
-				const resolvedPath = await Store.prepareIcloudFolder();
+				const setup = await Store.prepareIcloudFolder();
 				const next = { ...(settings ?? current), backend: "folder" as const, folder_path: ICLOUD_FOLDER_PATH };
 				await Store.setSettings(next);
 				settings = next;
+				const copied = setup.merge.items_added + setup.merge.history_added + setup.merge.collections_added;
+				const mergeMessage = copied > 0
+					? ` Preserved local data: copied ${setup.merge.items_added} item(s), ${setup.merge.history_added} history record(s), and ${setup.merge.collections_added} collection(s).`
+					: " Local data was already present in the sync folder.";
 				syncSetupFeedback = {
 					kind: "success",
-					path: resolvedPath,
-					message: `Folder ready at ${resolvedPath}. Restart ShiftShift to activate iCloud storage.`,
+					path: setup.path,
+					message: `Folder ready at ${setup.path}.${mergeMessage} Restart ShiftShift to activate iCloud storage.`,
 				};
 			} catch (error) {
 				syncSetupFeedback = { kind: "error", message: `iCloud Drive setup failed: ${String(error)}` };

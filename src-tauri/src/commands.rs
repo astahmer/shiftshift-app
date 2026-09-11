@@ -6,7 +6,9 @@ use crate::custom_themes::{self, CustomTheme, CustomThemesState, ThemeColors};
 use crate::db::Db;
 use crate::export;
 use crate::settings::{self, Settings, SettingsState, ToastPosition};
-use crate::store::{Collection, FolderStore, HistoryEntry, Item, ItemKind, MoveDirection};
+use crate::store::{
+    Collection, FolderMergeReport, FolderStore, HistoryEntry, Item, ItemKind, MoveDirection,
+};
 use crate::templates::{self, Template, TemplatesState};
 
 #[tauri::command]
@@ -285,11 +287,10 @@ pub fn fetch_link_preview(url: String) -> Result<crate::link_preview::LinkPrevie
     crate::link_preview::fetch(&url)
 }
 
-/// Creates the app-owned folder inside the user's iCloud Drive. The folder
-/// backend is still selected on the next launch, but setup itself should be
-/// visible immediately rather than relying on a future restart to create it.
+/// Creates the app-owned folder inside the user's iCloud Drive and copies
+/// records missing from the folder before the backend switch takes effect.
 #[tauri::command]
-pub fn prepare_icloud_folder() -> Result<String, String> {
+pub fn prepare_icloud_folder(db: State<Db>) -> Result<IcloudFolderSetup, String> {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var_os("HOME")
@@ -305,7 +306,14 @@ pub fn prepare_icloud_folder() -> Result<String, String> {
             ));
         }
         let folder = cloud_root.join("shiftshift");
-        return FolderStore::prepare(&folder.to_string_lossy());
+        let path = FolderStore::prepare(&folder.to_string_lossy())?;
+        let folder_store = FolderStore::open(&path)?;
+        let merge = if db.active_backend == "local" {
+            folder_store.merge_from(db.store.as_ref())?
+        } else {
+            FolderMergeReport::default()
+        };
+        return Ok(IcloudFolderSetup { path, merge });
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -436,6 +444,12 @@ pub struct SyncStatus {
     pub active_backend: String,
     pub configured_backend: String,
     pub fallback_reason: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct IcloudFolderSetup {
+    pub path: String,
+    pub merge: FolderMergeReport,
 }
 
 #[tauri::command]

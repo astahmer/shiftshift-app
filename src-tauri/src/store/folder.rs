@@ -11,6 +11,7 @@
 //! client round-trips in seconds rather than requiring an explicit push,
 //! but it is not a CRDT and doesn't pretend to be one.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,16 @@ pub struct FolderStore {
     items_dir: PathBuf,
     history_dir: PathBuf,
     collections_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+pub struct FolderMergeReport {
+    pub items_added: usize,
+    pub items_existing: usize,
+    pub history_added: usize,
+    pub history_existing: usize,
+    pub collections_added: usize,
+    pub collections_existing: usize,
 }
 
 /// `Path` doesn't expand `~` itself — users will naturally type a `~/...`
@@ -140,6 +151,62 @@ impl FolderStore {
     fn write_collection(&self, collection: &Collection) -> Result<(), String> {
         let json = serde_json::to_string_pretty(collection).map_err(|e| e.to_string())?;
         fs::write(self.collection_path(&collection.id), json).map_err(|e| e.to_string())
+    }
+
+    fn write_history(&self, entry: &HistoryEntry) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(entry).map_err(|e| e.to_string())?;
+        fs::write(self.history_path(&entry.id), json).map_err(|e| e.to_string())
+    }
+
+    /// Adds records that are missing from this folder without deleting or
+    /// replacing records already synced there. This makes switching from the
+    /// local backend additive and safe after a partial iCloud setup.
+    pub fn merge_from(&self, source: &dyn Store) -> Result<FolderMergeReport, String> {
+        let source_items = source.list_items()?;
+        let source_history = source.list_history(u32::MAX)?;
+        let source_collections = source.list_collections()?;
+        let mut existing_items: HashSet<String> = self
+            .read_all_items()?
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+        let mut existing_history: HashSet<String> = self
+            .read_all_history()?
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        let mut existing_collections: HashSet<String> = self
+            .read_all_collections()?
+            .into_iter()
+            .map(|collection| collection.id)
+            .collect();
+        let mut report = FolderMergeReport::default();
+
+        for item in source_items {
+            if existing_items.insert(item.id.clone()) {
+                self.write_item(&item)?;
+                report.items_added += 1;
+            } else {
+                report.items_existing += 1;
+            }
+        }
+        for entry in source_history {
+            if existing_history.insert(entry.id.clone()) {
+                self.write_history(&entry)?;
+                report.history_added += 1;
+            } else {
+                report.history_existing += 1;
+            }
+        }
+        for collection in source_collections {
+            if existing_collections.insert(collection.id.clone()) {
+                self.write_collection(&collection)?;
+                report.collections_added += 1;
+            } else {
+                report.collections_existing += 1;
+            }
+        }
+        Ok(report)
     }
 }
 
@@ -323,6 +390,30 @@ mod tests {
         assert_eq!(prepared, root.to_string_lossy());
         assert!(root.join("items").is_dir());
         assert!(root.join("history").is_dir());
+    }
+
+    #[test]
+    fn merge_from_adds_missing_records_without_replacing_existing_items() {
+        let source = store();
+        let destination = store();
+        let existing = source.add_item("existing", ItemKind::Note, None).unwrap();
+        source
+            .log_event(Some(&existing.id), "created", None)
+            .unwrap();
+        let missing = source.add_item("missing", ItemKind::Todo, None).unwrap();
+        destination.restore_item(existing.clone()).unwrap();
+
+        let report = destination.merge_from(&source).unwrap();
+
+        assert_eq!(report.items_added, 1);
+        assert_eq!(report.items_existing, 1);
+        assert_eq!(report.history_added, 1);
+        assert_eq!(destination.list_items().unwrap().len(), 2);
+        assert!(destination
+            .list_items()
+            .unwrap()
+            .iter()
+            .any(|item| item.id == missing.id));
     }
 
     #[test]

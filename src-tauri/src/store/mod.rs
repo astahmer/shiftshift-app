@@ -20,7 +20,7 @@ mod folder;
 mod local;
 mod s3;
 
-pub use folder::FolderStore;
+pub use folder::{FolderMergeReport, FolderStore};
 pub use local::LocalSqliteStore;
 pub use s3::S3Store;
 

@@ -53,11 +53,30 @@ impl Db {
         if settings.backend == "folder" {
             match FolderStore::open(&settings.folder_path) {
                 Ok(store) => {
+                    if let Ok(folder_items) = store.list_items() {
+                        if folder_items.is_empty() {
+                            if let Ok(local_store) = Self::open_local(app_data_dir, settings) {
+                                if local_store
+                                    .list_items()
+                                    .map(|items| !items.is_empty())
+                                    .unwrap_or(false)
+                                {
+                                    return Ok(Self {
+                                        store: Arc::new(local_store),
+                                        active_backend: "local".to_string(),
+                                        fallback_reason: Some(
+                                            "Folder backend is empty while local storage still contains data; use iCloud setup to merge it before switching backends".to_string(),
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
                     return Ok(Self {
                         store: Arc::new(store),
                         active_backend: "folder".to_string(),
                         fallback_reason: None,
-                    })
+                    });
                 }
                 Err(e) => {
                     eprintln!("shiftshift: folder backend unavailable ({e}), falling back to local storage");
