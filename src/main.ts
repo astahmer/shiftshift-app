@@ -2856,7 +2856,6 @@ function buildCheckboxRow(label: string, checked: boolean, disabled: boolean, pa
 		applyInputSpellcheck(next.input_spellcheck);
 		renderListTabs();
 		await Store.setSettings(next);
-		await openSettings();
 	};
 	row.appendChild(checkbox);
 	return row;
