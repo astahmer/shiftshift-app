@@ -93,6 +93,13 @@ pub fn input_monitoring_granted() -> bool {
     unsafe { IOHIDCheckAccess(KIOHID_REQUEST_TYPE_LISTEN_EVENT) == KIOHID_ACCESS_TYPE_GRANTED }
 }
 
+/// Whether the gesture listener is usable. macOS can keep reporting an
+/// unknown TCC result for an ad-hoc app bundle even after the event tap has
+/// successfully armed, so the live tap is the authoritative fallback.
+pub fn input_monitoring_ready() -> bool {
+    input_monitoring_granted() || is_running()
+}
+
 /// Prompts for Input Monitoring the first time, and — importantly — makes
 /// macOS create the app's row in System Settings so the checkbox is there
 /// to tick, mirroring what `AXIsProcessTrusted` does for Accessibility.

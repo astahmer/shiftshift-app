@@ -405,13 +405,13 @@ pub fn open_accessibility_settings() -> Result<(), String> {
 
 /// Input Monitoring is a *separate* permission from Accessibility and is the
 /// one that actually lets the double-Shift tap read keystrokes from other
-/// apps — Accessibility alone leaves the tap silently inert. Surfaced
-/// alongside `accessibility_trusted` so the UI can tell you which of the two
-/// is missing instead of just failing quietly.
+/// apps — Accessibility alone leaves the tap silently inert. The live tap is
+/// also accepted here because macOS can report an unknown TCC result for an
+/// ad-hoc app bundle after a rebuild even when the tap is already armed.
 #[cfg(target_os = "macos")]
 #[tauri::command]
 pub fn input_monitoring_granted() -> bool {
-    crate::mac_tap::input_monitoring_granted()
+    crate::mac_tap::input_monitoring_ready()
 }
 
 #[cfg(not(target_os = "macos"))]
