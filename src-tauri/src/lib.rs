@@ -48,6 +48,7 @@ pub fn run() {
             let fallback_capture = settings.fallback_capture.clone();
             let fallback_image = settings.fallback_image.clone();
             let launch_at_login = settings.launch_at_login;
+            let managed_launch_item = std::env::var_os("SHIFTSHIFT_MANAGED_LAUNCHD").is_some();
             let show_in_dock = settings.show_in_dock;
             let show_tray_icon = settings.show_tray_icon;
             let dock_enabled = settings.dock_enabled;
@@ -82,7 +83,9 @@ pub fn run() {
 
             // Sync the OS-level login-item registration in case it drifted
             // (e.g. the setting was toggled, then the app was reinstalled).
-            let sync_result = if launch_at_login {
+            let sync_result = if managed_launch_item {
+                Ok(())
+            } else if launch_at_login {
                 app.autolaunch().enable()
             } else {
                 app.autolaunch().disable()

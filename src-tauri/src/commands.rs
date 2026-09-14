@@ -647,7 +647,9 @@ pub fn set_settings(
             ),
         )?;
     }
-    if next.launch_at_login != previous.launch_at_login {
+    if next.launch_at_login != previous.launch_at_login
+        && std::env::var_os("SHIFTSHIFT_MANAGED_LAUNCHD").is_none()
+    {
         let result = if next.launch_at_login {
             app.autolaunch().enable()
         } else {
