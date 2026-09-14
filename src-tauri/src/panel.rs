@@ -75,6 +75,12 @@ pub fn toggle(app: &AppHandle) {
     }
 }
 
+pub fn is_visible(app: &AppHandle) -> bool {
+    app.get_webview_window(PANEL_LABEL)
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false)
+}
+
 /// Raises the panel without toggling it shut if already open — used by the
 /// tray menu and by capture modes that want the panel visible (`open`/`draft`
 /// in `capture::handle_captured_text`).

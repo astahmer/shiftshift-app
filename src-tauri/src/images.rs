@@ -105,6 +105,15 @@ pub fn capture_clipboard_image(app: &AppHandle) -> Result<Item, String> {
         item
     };
     let _ = app.emit("refresh", ());
+    let mode = app
+        .state::<crate::settings::SettingsState>()
+        .0
+        .lock()
+        .unwrap()
+        .capture_mode;
+    if mode == crate::capture::CaptureMode::Open {
+        crate::panel::show(app);
+    }
     crate::notify::notify_captured(app, &item);
     crate::automation::dispatch(
         app,

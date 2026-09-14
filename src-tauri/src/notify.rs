@@ -28,6 +28,10 @@ use crate::store::Item;
 
 const EXCERPT_MAX: usize = 60;
 
+fn should_notify(style: NotificationStyle, panel_visible: bool) -> bool {
+    style != NotificationStyle::None && !panel_visible
+}
+
 /// Collapses an item's text to a single line and truncates it for a
 /// notification body — a multi-line capture would otherwise blow out the
 /// notification's height, and OS notification centers don't wrap forever.
@@ -54,7 +58,7 @@ pub fn custom_toast_copy(content: NotifyContent, title: &str, excerpt: &str) -> 
 
 pub fn notify_captured(app: &AppHandle, item: &Item) {
     let settings = app.state::<SettingsState>().0.lock().unwrap().clone();
-    if settings.notification_style == NotificationStyle::None {
+    if !should_notify(settings.notification_style, crate::panel::is_visible(app)) {
         return;
     }
     let kind_label = match item.kind {
@@ -217,6 +221,13 @@ mod tests {
             custom_toast_copy(NotifyContent::IconTitle, "Note saved", "buy milk"),
             ("Note saved".into(), String::new())
         );
+    }
+
+    #[test]
+    fn suppresses_capture_notifications_when_panel_is_visible() {
+        assert!(!should_notify(NotificationStyle::Custom, true));
+        assert!(should_notify(NotificationStyle::Custom, false));
+        assert!(!should_notify(NotificationStyle::None, false));
     }
 
     #[cfg(target_os = "macos")]

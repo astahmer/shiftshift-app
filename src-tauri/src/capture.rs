@@ -470,15 +470,15 @@ pub(crate) fn handle_captured_text(
     *LAST_CAPTURE.lock().unwrap() = Some((item.id.clone(), Instant::now()));
     let _ = app.emit("refresh", ());
     let _ = app.emit("captured", ());
+    if mode == CaptureMode::Open {
+        panel::show(app);
+    }
     crate::notify::notify_captured(app, &item);
     crate::automation::dispatch(
         app,
         crate::settings::AutomationEvent::ItemCreated,
         Some(item),
     );
-    if mode == CaptureMode::Open {
-        panel::show(app);
-    }
     Ok(())
 }
 
