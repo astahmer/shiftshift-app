@@ -7,50 +7,80 @@ use crate::db::Db;
 use crate::export;
 use crate::settings::{self, Settings, SettingsState, ToastPosition};
 use crate::store::{
-    Collection, FolderMergeReport, FolderStore, HistoryEntry, Item, ItemKind, MoveDirection,
+    Collection, FolderMergeReport, FolderStore, HistoryEntry, Item, ItemKind, MoveDirection, Store,
 };
 use crate::templates::{self, Template, TemplatesState};
 
-#[tauri::command]
-pub fn list_items(db: State<Db>) -> Result<Vec<Item>, String> {
-    db.store.list_items()
+async fn run_blocking<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+async fn run_store<T, F>(db: State<'_, Db>, operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&dyn Store) -> Result<T, String> + Send + 'static,
+{
+    let store = db.store.clone();
+    let store_lock = db.store_lock.clone();
+    run_blocking(move || {
+        let _guard = store_lock.lock().map_err(|error| error.to_string())?;
+        operation(store.as_ref())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn list_collections(db: State<Db>) -> Result<Vec<Collection>, String> {
-    db.store.list_collections()
+pub async fn list_items(db: State<'_, Db>) -> Result<Vec<Item>, String> {
+    run_store(db, |store| store.list_items()).await
 }
 
 #[tauri::command]
-pub fn save_collection(
-    db: State<Db>,
+pub async fn list_collections(db: State<'_, Db>) -> Result<Vec<Collection>, String> {
+    run_store(db, |store| store.list_collections()).await
+}
+
+#[tauri::command]
+pub async fn save_collection(
+    db: State<'_, Db>,
     app: AppHandle,
     collection: Collection,
 ) -> Result<(), String> {
     crate::store::validate_collection(&collection)?;
-    db.store.save_collection(collection)?;
+    run_store(db, move |store| store.save_collection(collection)).await?;
     let _ = app.emit("refresh", ());
     Ok(())
 }
 
 #[tauri::command]
-pub fn delete_collection(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    db.store.delete_collection(&id)?;
+pub async fn delete_collection(
+    db: State<'_, Db>,
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    run_store(db, move |store| store.delete_collection(&id)).await?;
     let _ = app.emit("refresh", ());
     Ok(())
 }
 
 #[tauri::command]
-pub fn add_item(
-    db: State<Db>,
+pub async fn add_item(
+    db: State<'_, Db>,
     app: AppHandle,
     text: String,
     kind: ItemKind,
 ) -> Result<Item, String> {
-    let item = db.store.add_item(&text, kind, None)?;
-    let _ = db
-        .store
-        .log_event(Some(&item.id), "created", Some(&item.text));
+    let item = run_store(db, move |store| {
+        let item = store.add_item(&text, kind, None)?;
+        let _ = store.log_event(Some(&item.id), "created", Some(&item.text));
+        Ok(item)
+    })
+    .await?;
     let _ = app.emit("refresh", ());
     crate::notify::notify_captured(&app, &item);
     crate::automation::dispatch(
@@ -62,94 +92,130 @@ pub fn add_item(
 }
 
 #[tauri::command]
-pub fn toggle_done(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    db.store.toggle_done(&id)?;
-    let _ = db.store.log_event(Some(&id), "toggled_done", None);
+pub async fn toggle_done(db: State<'_, Db>, app: AppHandle, id: String) -> Result<(), String> {
+    let item_id = id.clone();
+    run_store(db, move |store| {
+        store.toggle_done(&id)?;
+        let _ = store.log_event(Some(&id), "toggled_done", None);
+        Ok(())
+    })
+    .await?;
     let _ = app.emit("refresh", ());
     crate::automation::dispatch_current_item(
         &app,
         crate::settings::AutomationEvent::ItemUpdated,
-        &id,
+        &item_id,
     );
     Ok(())
 }
 
 #[tauri::command]
-pub fn toggle_bookmarked(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    db.store.toggle_bookmarked(&id)?;
-    let _ = db.store.log_event(Some(&id), "toggled_bookmark", None);
+pub async fn toggle_bookmarked(
+    db: State<'_, Db>,
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let item_id = id.clone();
+    run_store(db, move |store| {
+        store.toggle_bookmarked(&id)?;
+        let _ = store.log_event(Some(&id), "toggled_bookmark", None);
+        Ok(())
+    })
+    .await?;
     let _ = app.emit("refresh", ());
     crate::automation::dispatch_current_item(
         &app,
         crate::settings::AutomationEvent::ItemBookmarked,
-        &id,
+        &item_id,
     );
     Ok(())
 }
 
 #[tauri::command]
-pub fn set_kind(db: State<Db>, app: AppHandle, id: String, kind: ItemKind) -> Result<(), String> {
-    db.store.set_kind(&id, kind)?;
-    let _ = db
-        .store
-        .log_event(Some(&id), "kind_changed", Some(&format!("{kind:?}")));
+pub async fn set_kind(
+    db: State<'_, Db>,
+    app: AppHandle,
+    id: String,
+    kind: ItemKind,
+) -> Result<(), String> {
+    let item_id = id.clone();
+    let detail = format!("{kind:?}");
+    run_store(db, move |store| {
+        store.set_kind(&id, kind)?;
+        let _ = store.log_event(Some(&id), "kind_changed", Some(&detail));
+        Ok(())
+    })
+    .await?;
     let _ = app.emit("refresh", ());
     crate::automation::dispatch_current_item(
         &app,
         crate::settings::AutomationEvent::ItemUpdated,
-        &id,
+        &item_id,
     );
     Ok(())
 }
 
 #[tauri::command]
-pub fn set_item_tags(
-    db: State<Db>,
+pub async fn set_item_tags(
+    db: State<'_, Db>,
     app: AppHandle,
     id: String,
     tags: Vec<String>,
 ) -> Result<(), String> {
-    db.store.set_tags(&id, tags.clone())?;
+    let item_id = id.clone();
     let detail =
         serde_json::to_string(&crate::store::normalize_tags(&tags)).map_err(|e| e.to_string())?;
-    let _ = db.store.log_event(Some(&id), "tags_changed", Some(&detail));
+    run_store(db, move |store| {
+        store.set_tags(&id, tags)?;
+        let _ = store.log_event(Some(&id), "tags_changed", Some(&detail));
+        Ok(())
+    })
+    .await?;
     let _ = app.emit("refresh", ());
     crate::automation::dispatch_current_item(
         &app,
         crate::settings::AutomationEvent::ItemUpdated,
-        &id,
+        &item_id,
     );
     Ok(())
 }
 
 #[tauri::command]
-pub fn update_item_text(
-    db: State<Db>,
+pub async fn update_item_text(
+    db: State<'_, Db>,
     app: AppHandle,
     id: String,
     text: String,
 ) -> Result<(), String> {
-    db.store.update_text(&id, &text)?;
-    let _ = db.store.log_event(Some(&id), "edited", Some(&text));
+    let item_id = id.clone();
+    run_store(db, move |store| {
+        store.update_text(&id, &text)?;
+        let _ = store.log_event(Some(&id), "edited", Some(&text));
+        Ok(())
+    })
+    .await?;
     let _ = app.emit("refresh", ());
     crate::automation::dispatch_current_item(
         &app,
         crate::settings::AutomationEvent::ItemUpdated,
-        &id,
+        &item_id,
     );
     Ok(())
 }
 
 #[tauri::command]
-pub fn delete_item(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    let deleted_item = db
-        .store
-        .list_items()
-        .ok()
-        .and_then(|items| items.into_iter().find(|i| i.id == id));
-    let detail = deleted_item.as_ref().map(|item| item.text.as_str());
-    db.store.delete_item(&id)?;
-    let _ = db.store.log_event(Some(&id), "deleted", detail);
+pub async fn delete_item(db: State<'_, Db>, app: AppHandle, id: String) -> Result<(), String> {
+    let deleted_item = run_store(db, move |store| {
+        let deleted_item = store
+            .list_items()
+            .ok()
+            .and_then(|items| items.into_iter().find(|i| i.id == id));
+        let detail = deleted_item.as_ref().map(|item| item.text.as_str());
+        store.delete_item(&id)?;
+        let _ = store.log_event(Some(&id), "deleted", detail);
+        Ok(deleted_item)
+    })
+    .await?;
     let _ = app.emit("refresh", ());
     crate::automation::dispatch(
         &app,
@@ -160,14 +226,17 @@ pub fn delete_item(db: State<Db>, app: AppHandle, id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn clear_completed(db: State<Db>, app: AppHandle) -> Result<(), String> {
-    let deleted = db
-        .store
-        .list_items()?
-        .into_iter()
-        .filter(|item| item.done)
-        .collect::<Vec<_>>();
-    db.store.clear_completed()?;
+pub async fn clear_completed(db: State<'_, Db>, app: AppHandle) -> Result<(), String> {
+    let deleted = run_store(db, |store| {
+        let deleted = store
+            .list_items()?
+            .into_iter()
+            .filter(|item| item.done)
+            .collect::<Vec<_>>();
+        store.clear_completed()?;
+        Ok(deleted)
+    })
+    .await?;
     let _ = app.emit("refresh", ());
     for item in deleted {
         crate::automation::dispatch(
@@ -180,18 +249,19 @@ pub fn clear_completed(db: State<Db>, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn move_item(
-    db: State<Db>,
+pub async fn move_item(
+    db: State<'_, Db>,
     app: AppHandle,
     id: String,
     direction: MoveDirection,
 ) -> Result<(), String> {
-    db.store.move_item(&id, direction)?;
+    let item_id = id.clone();
+    run_store(db, move |store| store.move_item(&id, direction)).await?;
     let _ = app.emit("refresh", ());
     crate::automation::dispatch_current_item(
         &app,
         crate::settings::AutomationEvent::ItemUpdated,
-        &id,
+        &item_id,
     );
     Ok(())
 }
@@ -200,11 +270,18 @@ pub fn move_item(
 /// doc comment for why this takes a full previously-returned `Item` rather
 /// than reconstructing one.
 #[tauri::command]
-pub fn restore_item(db: State<Db>, app: AppHandle, item: Item) -> Result<(), String> {
-    db.store.restore_item(item.clone())?;
-    let _ = db
-        .store
-        .log_event(Some(&item.id), "restored", Some(&item.text));
+pub async fn restore_item(db: State<'_, Db>, app: AppHandle, item: Item) -> Result<(), String> {
+    let restored_item = item.clone();
+    run_store(db, move |store| {
+        store.restore_item(restored_item.clone())?;
+        let _ = store.log_event(
+            Some(&restored_item.id),
+            "restored",
+            Some(&restored_item.text),
+        );
+        Ok(())
+    })
+    .await?;
     let _ = app.emit("refresh", ());
     crate::automation::dispatch_current_item(
         &app,
@@ -217,13 +294,19 @@ pub fn restore_item(db: State<Db>, app: AppHandle, item: Item) -> Result<(), Str
 /// Undo/redo for `move_item` — sets an exact rank rather than "one slot
 /// up/down", so reordering can be reverted precisely.
 #[tauri::command]
-pub fn set_rank(db: State<Db>, app: AppHandle, id: String, rank: f64) -> Result<(), String> {
-    db.store.set_rank(&id, rank)?;
+pub async fn set_rank(
+    db: State<'_, Db>,
+    app: AppHandle,
+    id: String,
+    rank: f64,
+) -> Result<(), String> {
+    let item_id = id.clone();
+    run_store(db, move |store| store.set_rank(&id, rank)).await?;
     let _ = app.emit("refresh", ());
     crate::automation::dispatch_current_item(
         &app,
         crate::settings::AutomationEvent::ItemUpdated,
-        &id,
+        &item_id,
     );
     Ok(())
 }
@@ -247,20 +330,25 @@ pub fn start_item_drag(
 }
 
 #[tauri::command]
-pub fn list_history(db: State<Db>, limit: u32) -> Result<Vec<HistoryEntry>, String> {
-    db.store.list_history(limit)
+pub async fn list_history(db: State<'_, Db>, limit: u32) -> Result<Vec<HistoryEntry>, String> {
+    run_store(db, move |store| store.list_history(limit)).await
 }
 
 /// Called by the frontend right after copying/opening a selected row, purely
 /// to record it in history — not a mutation, so no "refresh" event.
 #[tauri::command]
-pub fn log_used(db: State<Db>, app: AppHandle, id: String) -> Result<(), String> {
-    db.store.log_event(Some(&id), "used", None)?;
+pub async fn log_used(db: State<'_, Db>, app: AppHandle, id: String) -> Result<(), String> {
+    let item_id = id.clone();
+    run_store(db, move |store| store.log_event(Some(&id), "used", None)).await?;
     // Usage is an event in its own right, so a hook can build analytics or a
     // recency-based organizer without making capture/copy code provider-aware.
     // The item may have been deleted between the UI read and this call; in
     // that case there is simply no item payload to send.
-    crate::automation::dispatch_current_item(&app, crate::settings::AutomationEvent::ItemUsed, &id);
+    crate::automation::dispatch_current_item(
+        &app,
+        crate::settings::AutomationEvent::ItemUsed,
+        &item_id,
+    );
     Ok(())
 }
 
@@ -273,47 +361,51 @@ pub fn note_own_clipboard_write(text: String) {
 }
 
 #[tauri::command]
-pub fn capture_clipboard_image(app: AppHandle) -> Result<Item, String> {
-    crate::images::capture_clipboard_image(&app)
+pub async fn capture_clipboard_image(app: AppHandle) -> Result<Item, String> {
+    run_blocking(move || crate::images::capture_clipboard_image(&app)).await
 }
 
 #[tauri::command]
-pub fn copy_image_to_clipboard(path: String) -> Result<(), String> {
-    crate::images::copy_image_to_clipboard(&path)
+pub async fn copy_image_to_clipboard(path: String) -> Result<(), String> {
+    run_blocking(move || crate::images::copy_image_to_clipboard(&path)).await
 }
 
 #[tauri::command]
-pub fn fetch_link_preview(url: String) -> Result<crate::link_preview::LinkPreview, String> {
-    crate::link_preview::fetch(&url)
+pub async fn fetch_link_preview(url: String) -> Result<crate::link_preview::LinkPreview, String> {
+    run_blocking(move || crate::link_preview::fetch(&url)).await
 }
 
 /// Creates the app-owned folder inside the user's iCloud Drive and copies
 /// records missing from the folder before the backend switch takes effect.
 #[tauri::command]
-pub fn prepare_icloud_folder(db: State<Db>) -> Result<IcloudFolderSetup, String> {
+pub async fn prepare_icloud_folder(db: State<'_, Db>) -> Result<IcloudFolderSetup, String> {
     #[cfg(target_os = "macos")]
     {
+        let active_backend = db.active_backend.clone();
         let home = std::env::var_os("HOME")
             .ok_or_else(|| "Could not determine your home folder".to_string())?;
-        let cloud_root = std::path::PathBuf::from(home)
-            .join("Library")
-            .join("Mobile Documents")
-            .join("com~apple~CloudDocs");
-        if !cloud_root.is_dir() {
-            return Err(format!(
-                "iCloud Drive is not available at {}. Turn on iCloud Drive in System Settings and try again.",
-                cloud_root.display()
-            ));
-        }
-        let folder = cloud_root.join("shiftshift");
-        let path = FolderStore::prepare(&folder.to_string_lossy())?;
-        let folder_store = FolderStore::open(&path)?;
-        let merge = if db.active_backend == "local" {
-            folder_store.merge_from(db.store.as_ref())?
-        } else {
-            FolderMergeReport::default()
-        };
-        return Ok(IcloudFolderSetup { path, merge });
+        return run_store(db, move |store| {
+            let cloud_root = std::path::PathBuf::from(home)
+                .join("Library")
+                .join("Mobile Documents")
+                .join("com~apple~CloudDocs");
+            if !cloud_root.is_dir() {
+                return Err(format!(
+                    "iCloud Drive is not available at {}. Turn on iCloud Drive in System Settings and try again.",
+                    cloud_root.display()
+                ));
+            }
+            let folder = cloud_root.join("shiftshift");
+            let path = FolderStore::prepare(&folder.to_string_lossy())?;
+            let folder_store = FolderStore::open(&path)?;
+            let merge = if active_backend == "local" {
+                folder_store.merge_from(store)?
+            } else {
+                FolderMergeReport::default()
+            };
+            Ok(IcloudFolderSetup { path, merge })
+        })
+        .await;
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -774,21 +866,24 @@ pub fn clear_s3_secret() -> Result<(), String> {
 /// Writes a timestamped `.md` file under the app data dir and returns its
 /// path, so the frontend can open it (e.g. via `plugin-shell`'s `open`).
 #[tauri::command]
-pub fn export_markdown(db: State<Db>, app: AppHandle) -> Result<String, String> {
-    let items = db.store.list_items()?;
-    let markdown = export::to_markdown(&items);
+pub async fn export_markdown(db: State<'_, Db>, app: AppHandle) -> Result<String, String> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("exports");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!(
-        "shiftshift-{}.md",
-        chrono::Utc::now().format("%Y%m%d-%H%M%S")
-    ));
-    std::fs::write(&path, markdown).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().into_owned())
+    run_store(db, move |store| {
+        let items = store.list_items()?;
+        let markdown = export::to_markdown(&items);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!(
+            "shiftshift-{}.md",
+            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+        ));
+        std::fs::write(&path, markdown).map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
 }
 
 #[tauri::command]

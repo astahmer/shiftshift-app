@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::settings::Settings;
 use crate::store::{FolderStore, LocalSqliteStore, S3Store, Store};
@@ -17,6 +17,7 @@ use crate::store::{FolderStore, LocalSqliteStore, S3Store, Store};
 /// to the frontend so Settings can show a real status instead.
 pub struct Db {
     pub store: Arc<dyn Store>,
+    pub store_lock: Arc<Mutex<()>>,
     pub active_backend: String,
     pub fallback_reason: Option<String>,
 }
@@ -32,11 +33,7 @@ impl Db {
         if settings.backend == "s3" {
             match S3Store::open(&settings.s3) {
                 Ok(store) => {
-                    return Ok(Self {
-                        store: Arc::new(store),
-                        active_backend: "s3".to_string(),
-                        fallback_reason: None,
-                    })
+                    return Ok(Self::from_store(Arc::new(store), "s3", None));
                 }
                 Err(e) => {
                     eprintln!(
@@ -53,30 +50,20 @@ impl Db {
         if settings.backend == "folder" {
             match FolderStore::open(&settings.folder_path) {
                 Ok(store) => {
-                    if let Ok(folder_items) = store.list_items() {
-                        if folder_items.is_empty() {
-                            if let Ok(local_store) = Self::open_local(app_data_dir, settings) {
-                                if local_store
-                                    .list_items()
-                                    .map(|items| !items.is_empty())
-                                    .unwrap_or(false)
-                                {
-                                    return Ok(Self {
-                                        store: Arc::new(local_store),
-                                        active_backend: "local".to_string(),
-                                        fallback_reason: Some(
-                                            "Folder backend is empty while local storage still contains data; use iCloud setup to merge it before switching backends".to_string(),
-                                        ),
-                                    });
-                                }
+                    if let Ok(false) = store.has_items() {
+                        if let Ok(local_store) = Self::open_local(app_data_dir, settings) {
+                            if local_store.has_items().unwrap_or(false) {
+                                return Ok(Self::from_store(
+                                    Arc::new(local_store),
+                                    "local",
+                                    Some(
+                                        "Folder backend is empty while local storage still contains data; use iCloud setup to merge it before switching backends".to_string(),
+                                    ),
+                                ));
                             }
                         }
                     }
-                    return Ok(Self {
-                        store: Arc::new(store),
-                        active_backend: "folder".to_string(),
-                        fallback_reason: None,
-                    });
+                    return Ok(Self::from_store(Arc::new(store), "folder", None));
                 }
                 Err(e) => {
                     eprintln!("shiftshift: folder backend unavailable ({e}), falling back to local storage");
@@ -89,11 +76,20 @@ impl Db {
             }
         }
         let store = Self::open_local(app_data_dir, settings)?;
-        Ok(Self {
-            store: Arc::new(store),
-            active_backend: "local".to_string(),
-            fallback_reason: None,
-        })
+        Ok(Self::from_store(Arc::new(store), "local", None))
+    }
+
+    fn from_store(
+        store: Arc<dyn Store>,
+        active_backend: &str,
+        fallback_reason: Option<String>,
+    ) -> Self {
+        Self {
+            store,
+            store_lock: Arc::new(Mutex::new(())),
+            active_backend: active_backend.to_string(),
+            fallback_reason,
+        }
     }
 
     fn open_local_fallback(
@@ -102,11 +98,7 @@ impl Db {
         reason: String,
     ) -> Result<Self, String> {
         let store = Self::open_local(app_data_dir, settings)?;
-        Ok(Self {
-            store: Arc::new(store),
-            active_backend: "local".to_string(),
-            fallback_reason: Some(reason),
-        })
+        Ok(Self::from_store(Arc::new(store), "local", Some(reason)))
     }
 
     fn open_local(

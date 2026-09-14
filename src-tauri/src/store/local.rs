@@ -64,6 +64,15 @@ impl LocalSqliteStore {
         })
     }
 
+    pub fn has_items(&self) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map(|exists| exists != 0)
+        .map_err(|e| e.to_string())
+    }
+
     fn is_readable(conn: &Connection) -> bool {
         conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
             r.get::<_, i64>(0)
@@ -528,6 +537,14 @@ mod tests {
         assert_eq!(items[0].id, added.id);
         assert_eq!(items[0].text, "buy milk");
         assert!(!items[0].done);
+    }
+
+    #[test]
+    fn reports_item_presence_without_loading_items() {
+        let s = store();
+        assert!(!s.has_items().unwrap());
+        s.add_item("present", ItemKind::Note, None).unwrap();
+        assert!(s.has_items().unwrap());
     }
 
     #[test]

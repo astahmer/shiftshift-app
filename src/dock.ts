@@ -264,6 +264,8 @@ let listFilterKey = "";
 let lastHelpCategory = "";
 let filteredCache: Item[] | null = null;
 let hoveredId: string | null = null;
+let refreshInFlight: Promise<void> | null = null;
+let refreshQueued = false;
 
 const MODE_BADGE_LABELS: Partial<Record<SlashMode["type"], string>> = {
 	theme: "THEME",
@@ -1010,25 +1012,39 @@ function applyExpanded(next: boolean): void {
 }
 
 async function refresh(): Promise<void> {
-	const [nextSettings, nextItems, nextTemplates, nextThemes] = await Promise.all([
-		Store.getSettings(),
-		Store.listItems(),
-		Store.listTemplates(),
-		Store.listCustomThemes(),
-	]);
-	settings = nextSettings;
-	applyComposerSpellcheck(nextSettings.input_spellcheck);
-	items = nextItems;
-	templatesCache = nextTemplates;
-	customThemesCache = nextThemes;
-	invalidateFiltered();
-	itemCount = Math.max(1, nextSettings.dock_item_count || 10);
-	rowHeight = nextSettings.dock_row_height > 0 ? nextSettings.dock_row_height : DEFAULT_ROW_HEIGHT;
-	root.dataset.edge = edgeFromPosition(nextSettings.dock_position);
-	root.dataset.anchor = anchorFromPosition(nextSettings.dock_position);
-	if (previewSnapshot === null) applyTheme(nextSettings.theme);
-	renderTabs();
-	render();
+	if (refreshInFlight) {
+		refreshQueued = true;
+		return refreshInFlight;
+	}
+	refreshInFlight = (async () => {
+		do {
+			refreshQueued = false;
+			const [nextSettings, nextItems, nextTemplates, nextThemes] = await Promise.all([
+				Store.getSettings(),
+				Store.listItems(),
+				Store.listTemplates(),
+				Store.listCustomThemes(),
+			]);
+			settings = nextSettings;
+			applyComposerSpellcheck(nextSettings.input_spellcheck);
+			items = nextItems;
+			templatesCache = nextTemplates;
+			customThemesCache = nextThemes;
+			invalidateFiltered();
+			itemCount = Math.max(1, nextSettings.dock_item_count || 10);
+			rowHeight = nextSettings.dock_row_height > 0 ? nextSettings.dock_row_height : DEFAULT_ROW_HEIGHT;
+			root.dataset.edge = edgeFromPosition(nextSettings.dock_position);
+			root.dataset.anchor = anchorFromPosition(nextSettings.dock_position);
+			if (previewSnapshot === null) applyTheme(nextSettings.theme);
+			renderTabs();
+			render();
+		} while (refreshQueued);
+	})();
+	try {
+		await refreshInFlight;
+	} finally {
+		refreshInFlight = null;
+	}
 }
 void refresh();
 

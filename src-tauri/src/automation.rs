@@ -115,12 +115,13 @@ pub fn dispatch_current_item(app: &AppHandle, event: AutomationEvent, id: &str) 
     let app = app.clone();
     let id = id.to_string();
     thread::spawn(move || {
-        let item = app
-            .state::<Db>()
-            .store
-            .list_items()
-            .ok()
-            .and_then(|items| items.into_iter().find(|item| item.id == id));
+        let db = app.state::<Db>();
+        let item = db.store_lock.lock().ok().and_then(|_guard| {
+            db.store
+                .list_items()
+                .ok()
+                .and_then(|items| items.into_iter().find(|item| item.id == id))
+        });
         if item.is_some() {
             dispatch(&app, event, item);
         }
@@ -234,6 +235,7 @@ fn apply_actions(
 
     let _guard = APPLY_LOCK.lock().map_err(|error| error.to_string())?;
     let db = app.state::<Db>();
+    let _store_guard = db.store_lock.lock().map_err(|error| error.to_string())?;
     let Some(mut item) = db
         .store
         .list_items()?
@@ -323,6 +325,9 @@ fn record_failure(
         return;
     };
     let db = app.state::<Db>();
+    let Ok(_store_guard) = db.store_lock.lock() else {
+        return;
+    };
     let detail = format!("hook={}; event={}; error={error}", hook.id, event.as_str());
     let _ = db
         .store

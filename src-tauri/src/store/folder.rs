@@ -82,6 +82,16 @@ impl FolderStore {
         })
     }
 
+    pub fn has_items(&self) -> Result<bool, String> {
+        for entry in fs::read_dir(&self.items_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.path().extension().and_then(|e| e.to_str()) == Some("json") {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn item_path(&self, id: &str) -> PathBuf {
         self.items_dir.join(format!("{id}.json"))
     }
@@ -390,6 +400,14 @@ mod tests {
         assert_eq!(prepared, root.to_string_lossy());
         assert!(root.join("items").is_dir());
         assert!(root.join("history").is_dir());
+    }
+
+    #[test]
+    fn reports_item_presence_without_reading_item_contents() {
+        let s = store();
+        assert!(!s.has_items().unwrap());
+        s.add_item("present", ItemKind::Note, None).unwrap();
+        assert!(s.has_items().unwrap());
     }
 
     #[test]

@@ -250,6 +250,8 @@ let templatesCache: Template[] = [];
 let customThemesCache: CustomTheme[] = [];
 let selected = -1;
 let settings: Settings | null = null;
+let refreshInFlight: Promise<void> | null = null;
+let refreshQueued = false;
 const ICLOUD_FOLDER_PATH = "~/Library/Mobile Documents/com~apple~CloudDocs/shiftshift";
 type SyncSetupFeedback = { kind: "success" | "error"; message: string; path?: string };
 let syncSetupFeedback: SyncSetupFeedback | null = null;
@@ -1991,22 +1993,36 @@ function closeDetail(): void {
 }
 
 async function refresh(): Promise<void> {
-	[items, templatesCache, collections] = await Promise.all([
-		Store.listItems(),
-		Store.listTemplates(),
-		Store.listCollections(),
-	]);
-	if (detailItem && !detailView.hidden) {
-		const updated = items.find((i) => i.id === detailItem!.id);
-		if (updated) {
-			detailItem = updated;
-			buildDetailView(updated);
-		} else {
-			closeDetail();
-		}
+	if (refreshInFlight) {
+		refreshQueued = true;
+		return refreshInFlight;
 	}
-	renderListTabs();
-	renderList();
+	refreshInFlight = (async () => {
+		do {
+			refreshQueued = false;
+			[items, templatesCache, collections] = await Promise.all([
+				Store.listItems(),
+				Store.listTemplates(),
+				Store.listCollections(),
+			]);
+			if (detailItem && !detailView.hidden) {
+				const updated = items.find((i) => i.id === detailItem!.id);
+				if (updated) {
+					detailItem = updated;
+					buildDetailView(updated);
+				} else {
+					closeDetail();
+				}
+			}
+			renderListTabs();
+			renderList();
+		} while (refreshQueued);
+	})();
+	try {
+		await refreshInFlight;
+	} finally {
+		refreshInFlight = null;
+	}
 }
 
 async function saveNew(raw: string, copy = false): Promise<void> {

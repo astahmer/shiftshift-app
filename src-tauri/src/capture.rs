@@ -110,7 +110,12 @@ pub(crate) fn promote_last_capture_to_todo(app: &AppHandle, gesture_at: Instant)
             if let Some((id, at)) = LAST_CAPTURE.lock().unwrap().clone() {
                 if at >= gesture_at {
                     let db = app.state::<db::Db>();
-                    if db.store.set_kind(&id, crate::store::ItemKind::Todo).is_ok() {
+                    let changed = db
+                        .store_lock
+                        .lock()
+                        .map(|_guard| db.store.set_kind(&id, crate::store::ItemKind::Todo).is_ok())
+                        .unwrap_or(false);
+                    if changed {
                         let _ = app.emit("refresh", ());
                     }
                     return;
@@ -255,9 +260,12 @@ pub fn register_fallback_shortcuts(
     if !image.is_empty() {
         gs.on_shortcut(image, |app, _shortcut, event| {
             if event.state() == ShortcutState::Pressed {
-                if let Err(e) = crate::images::capture_clipboard_image(app) {
-                    eprintln!("shiftshift: image capture failed: {e}");
-                }
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = crate::images::capture_clipboard_image(&app) {
+                        eprintln!("shiftshift: image capture failed: {e}");
+                    }
+                });
             }
         })
         .map_err(|e| format!("could not register fallback image shortcut {image:?}: {e}"))?;
@@ -317,18 +325,7 @@ fn do_capture(app: &AppHandle) -> Result<(), String> {
         drop(last_seen);
         if is_new {
             match crate::images::capture_clipboard_image(app) {
-                Ok(_) => {
-                    let mode = app
-                        .state::<settings::SettingsState>()
-                        .0
-                        .lock()
-                        .unwrap()
-                        .capture_mode;
-                    if mode == CaptureMode::Open {
-                        panel::show(app);
-                    }
-                    return Ok(());
-                }
+                Ok(_) => return Ok(()),
                 Err(e) => return Err(e),
             }
         }
@@ -462,11 +459,15 @@ pub(crate) fn handle_captured_text(
     }
 
     let db = app.state::<db::Db>();
-    let item = db.store.add_item(text, detect_kind(text), source_app)?;
+    let item = {
+        let _guard = db.store_lock.lock().map_err(|e| e.to_string())?;
+        let item = db.store.add_item(text, detect_kind(text), source_app)?;
+        let _ = db
+            .store
+            .log_event(Some(&item.id), "created", Some(&item.text));
+        item
+    };
     *LAST_CAPTURE.lock().unwrap() = Some((item.id.clone(), Instant::now()));
-    let _ = db
-        .store
-        .log_event(Some(&item.id), "created", Some(&item.text));
     let _ = app.emit("refresh", ());
     let _ = app.emit("captured", ());
     crate::notify::notify_captured(app, &item);
