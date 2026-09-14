@@ -389,17 +389,16 @@ pub fn accessibility_trusted() -> bool {
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn open_accessibility_settings() -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+pub fn open_accessibility_settings(app: AppHandle) -> Result<(), String> {
+    open_system_settings(
+        &app,
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    )
 }
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-pub fn open_accessibility_settings() -> Result<(), String> {
+pub fn open_accessibility_settings(_app: AppHandle) -> Result<(), String> {
     Err("not applicable on this platform".to_string())
 }
 
@@ -422,18 +421,30 @@ pub fn input_monitoring_granted() -> bool {
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn open_input_monitoring_settings() -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+pub fn open_input_monitoring_settings(app: AppHandle) -> Result<(), String> {
+    open_system_settings(
+        &app,
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+    )
 }
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-pub fn open_input_monitoring_settings() -> Result<(), String> {
+pub fn open_input_monitoring_settings(_app: AppHandle) -> Result<(), String> {
     Err("not applicable on this platform".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn open_system_settings(app: &AppHandle, pane: &str) -> Result<(), String> {
+    crate::panel::hide(app);
+    let status = std::process::Command::new("/usr/bin/open")
+        .args(["-b", "com.apple.systempreferences", pane])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err(format!("System Settings exited with {status}"));
+    }
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
