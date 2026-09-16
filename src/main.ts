@@ -4839,6 +4839,10 @@ function buildSettingsNav(): HTMLElement {
 	search.className = "settings-search";
 	search.type = "search";
 	search.placeholder = "Search settings…";
+	search.autocomplete = "off";
+	search.spellcheck = false;
+	search.setAttribute("autocorrect", "off");
+	search.setAttribute("autocapitalize", "off");
 	search.oninput = () => filterSettings(search.value);
 	sticky.appendChild(search);
 	const nav = document.createElement("div");
