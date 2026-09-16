@@ -3899,7 +3899,7 @@ type FallbackShortcutKey = "fallback_toggle" | "fallback_capture" | "fallback_im
 
 const DEFAULT_FALLBACK: Record<FallbackShortcutKey, string> = {
 	fallback_toggle: "CmdOrCtrl+Shift+Space",
-	fallback_capture: "CmdOrCtrl+Shift+C",
+	fallback_capture: "CmdOrCtrl+Shift+X",
 	fallback_image: "CmdOrCtrl+Shift+I",
 };
 

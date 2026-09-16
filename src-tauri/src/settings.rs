@@ -14,9 +14,11 @@ use crate::store::CollectionQuery;
 const FILE_NAME: &str = "settings.json";
 
 pub const DEFAULT_FALLBACK_TOGGLE: &str = "CmdOrCtrl+Shift+Space";
-pub const DEFAULT_FALLBACK_CAPTURE: &str = "CmdOrCtrl+Shift+C";
+pub const DEFAULT_FALLBACK_CAPTURE: &str = "CmdOrCtrl+Shift+X";
 pub const DEFAULT_FALLBACK_IMAGE: &str = "CmdOrCtrl+Shift+I";
 pub const DEFAULT_SOUND_NAME: &str = "Glass";
+
+const LEGACY_FALLBACK_CAPTURE: &str = "CmdOrCtrl+Shift+C";
 
 /// What happens when something is captured — see `notify.rs`. `Custom` is
 /// an in-app toast (the panel briefly appears unfocused with a checkmark
@@ -437,6 +439,7 @@ pub fn load(app_data_dir: &Path) -> Settings {
     if value.get("bindings").is_some() {
         let mut settings = serde_json::from_value(value).unwrap_or_default();
         migrate_legacy_dock_box(&mut settings);
+        migrate_legacy_fallback_capture(&mut settings);
         return settings;
     }
     // Legacy settings.json from before Settings grew beyond just bindings —
@@ -471,6 +474,12 @@ fn migrate_legacy_dock_box(settings: &mut Settings) {
         && settings.dock_item_count == 5
     {
         settings.dock_item_count = 10;
+    }
+}
+
+fn migrate_legacy_fallback_capture(settings: &mut Settings) {
+    if settings.fallback_capture == LEGACY_FALLBACK_CAPTURE {
+        settings.fallback_capture = DEFAULT_FALLBACK_CAPTURE.to_string();
     }
 }
 
@@ -662,6 +671,30 @@ mod tests {
         assert_eq!(settings.bindings.left, Action::None);
         assert_eq!(settings.bindings.right, Action::Capture);
         assert_eq!(settings.theme, "tokyo-night");
+    }
+
+    #[test]
+    fn migrates_the_old_capture_fallback_shortcut() {
+        let dir = tempdir();
+        let mut settings = Settings::default();
+        settings.fallback_capture = LEGACY_FALLBACK_CAPTURE.to_string();
+        save(&dir, &settings).unwrap();
+
+        let loaded = load(&dir);
+
+        assert_eq!(loaded.fallback_capture, DEFAULT_FALLBACK_CAPTURE);
+    }
+
+    #[test]
+    fn preserves_custom_capture_fallback_shortcuts() {
+        let dir = tempdir();
+        let mut settings = Settings::default();
+        settings.fallback_capture = "CmdOrCtrl+Shift+K".to_string();
+        save(&dir, &settings).unwrap();
+
+        let loaded = load(&dir);
+
+        assert_eq!(loaded.fallback_capture, "CmdOrCtrl+Shift+K");
     }
 
     fn tempdir() -> std::path::PathBuf {
