@@ -5,6 +5,7 @@ import { applyCustomPalette, clearCustomPalette, isThemeId, normalizeTheme } fro
 import { normalizeThemeColors } from "./capture-logic";
 
 let appliedTheme = "";
+let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
 function applyBuiltinTheme(themeId: string): void {
 	if (appliedTheme === themeId) return;
@@ -26,7 +27,11 @@ async function hydrateCustomTheme(themeId: string): Promise<void> {
 	}
 }
 
-function playToast(title: string, body: string, fontScale: number, theme: string): void {
+function playToast(title: string, body: string, fontScale: number, durationMs: number | null, theme: string): void {
+	if (hideTimer !== undefined) {
+		clearTimeout(hideTimer);
+		hideTimer = undefined;
+	}
 	applyBuiltinTheme(theme);
 	titleEl.textContent = title;
 	bodyEl.textContent = body;
@@ -36,6 +41,13 @@ function playToast(title: string, body: string, fontScale: number, theme: string
 	void toast.offsetWidth;
 	toast.classList.add("capture-toast-play");
 	void getCurrentWindow().show();
+	if (durationMs !== null) {
+		hideTimer = setTimeout(() => {
+			hideTimer = undefined;
+			toast.classList.remove("capture-toast-play");
+			void getCurrentWindow().hide();
+		}, Math.max(1, durationMs));
+	}
 	void hydrateCustomTheme(theme);
 }
 
@@ -59,8 +71,8 @@ const toast = root.querySelector<HTMLElement>(".capture-toast")!;
 const titleEl = root.querySelector<HTMLElement>(".capture-toast-title")!;
 const bodyEl = root.querySelector<HTMLElement>(".capture-toast-body")!;
 
-void listen<{ title: string; body: string; font_scale: number; theme: string }>("capture-toast", (event) => {
-	playToast(event.payload.title, event.payload.body, event.payload.font_scale, event.payload.theme);
+void listen<{ title: string; body: string; font_scale: number; duration_ms: number | null; theme: string }>("capture-toast", (event) => {
+	playToast(event.payload.title, event.payload.body, event.payload.font_scale, event.payload.duration_ms, event.payload.theme);
 }).then(() => Store.toastReady());
 
 // Only reachable while Settings -> Notifications -> "Drag to place" is

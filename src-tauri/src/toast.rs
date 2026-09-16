@@ -40,6 +40,7 @@ pub struct CaptureToast {
     pub body: String,
     /// Percent scale (100 = normal) — see `Settings::toast_font_scale`.
     pub font_scale: u8,
+    pub duration_ms: Option<u32>,
     /// Built-in or custom theme id so the toast window can restyle without
     /// a separate settings round-trip (it is created once and kept around).
     pub theme: String,
@@ -184,6 +185,7 @@ fn reveal(
     duration_ms: Option<u32>,
     focusable: bool,
 ) {
+    let duration_ms = duration_ms.map(|duration| duration.max(1));
     let Some(window) = ensure_window(app) else {
         return;
     };
@@ -200,6 +202,7 @@ fn reveal(
         title: title.to_string(),
         body: body.to_string(),
         font_scale,
+        duration_ms,
         theme,
     };
     *LAST_TOAST.lock().unwrap() = Some(payload);
@@ -435,5 +438,19 @@ mod tests {
     fn text_toast_stays_a_wide_banner() {
         let size = toast_window_size("Note saved", "buy milk", 100);
         assert!(size.width > size.height);
+    }
+
+    #[test]
+    fn transient_toast_payload_exposes_duration() {
+        let payload = serde_json::to_value(CaptureToast {
+            title: "Image saved".to_string(),
+            body: String::new(),
+            font_scale: 100,
+            duration_ms: Some(1800),
+            theme: "light".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(payload["duration_ms"], serde_json::json!(1800));
     }
 }
