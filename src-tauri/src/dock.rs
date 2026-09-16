@@ -30,10 +30,12 @@ const MAX_ROW_HEIGHT: f64 = 64.0;
 const MIN_ITEM_COUNT: u8 = 1;
 const MAX_ITEM_COUNT: u8 = 16;
 /// Extra reach past the visible 20×66 pill. The thin across-axis is the
-/// hard miss — pad much more toward the screen interior than off-screen.
-const HOVER_INSET_ALONG: f64 = 24.0;
-const HOVER_INSET_INSIDE: f64 = 48.0;
-const HOVER_INSET_OUTSIDE: f64 = 12.0;
+/// hard miss — pad more toward the screen interior than off-screen, but
+/// stay near the pill: a pointer crossing the menu bar or skimming the
+/// edge should not arm the rail.
+const HOVER_INSET_ALONG: f64 = 12.0;
+const HOVER_INSET_INSIDE: f64 = 20.0;
+const HOVER_INSET_OUTSIDE: f64 = 6.0;
 /// Stay open while the pointer is just outside grabbing a resize edge.
 const RESIZE_SLOP: f64 = 12.0;
 const MIN_EXPANDED_WIDTH: f64 = 160.0;
@@ -1041,7 +1043,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_hit_reaches_well_inside_the_screen() {
+    fn collapsed_hit_stays_near_the_pill() {
         let pos = PhysicalPosition::new(0, 200);
         let size = PhysicalSize::new(640, 1000);
         let handle = collapsed_handle_rect(pos, size, ToastPosition::MiddleLeft, 2.0);
@@ -1049,20 +1051,32 @@ mod tests {
         assert!(handle.contains(20, 700));
         assert!(!handle.contains(80, 700));
         assert!(hit.contains(20, 700));
-        assert!(hit.contains(80, 700));
+        assert!(hit.contains(handle.x + handle.w + 30, 700));
+        assert!(!hit.contains(handle.x + handle.w + 60, 700));
         assert!(hit.w > handle.w);
         assert!(hit.h > handle.h);
     }
 
     #[test]
-    fn right_edge_hit_reaches_leftward_into_the_screen() {
+    fn right_edge_hit_reaches_only_slightly_leftward_into_the_screen() {
         let pos = PhysicalPosition::new(1280, 200);
         let size = PhysicalSize::new(640, 1000);
         let handle = collapsed_handle_rect(pos, size, ToastPosition::MiddleRight, 2.0);
         let hit = collapsed_hit_rect(pos, size, ToastPosition::MiddleRight, 2.0);
-        let inside_x = handle.x - 60;
-        assert!(!handle.contains(inside_x, 700));
-        assert!(hit.contains(inside_x, 700));
+        assert!(!handle.contains(handle.x - 30, 700));
+        assert!(hit.contains(handle.x - 30, 700));
+        assert!(!hit.contains(handle.x - 60, 700));
+    }
+
+    #[test]
+    fn top_center_hit_does_not_stretch_far_below_the_edge() {
+        let pos = PhysicalPosition::new(0, 0);
+        let size = PhysicalSize::new(320, 220);
+        let handle = collapsed_handle_rect(pos, size, ToastPosition::TopCenter, 2.0);
+        let hit = collapsed_hit_rect(pos, size, ToastPosition::TopCenter, 2.0);
+        assert_eq!(handle.y, 0);
+        assert!(hit.contains(160, handle.y + handle.h + 30));
+        assert!(!hit.contains(160, handle.y + handle.h + 60));
     }
 
     #[test]
