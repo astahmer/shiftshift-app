@@ -723,6 +723,8 @@ pub fn set_settings(
     mut next: Settings,
 ) -> Result<(), String> {
     let previous = settings.0.lock().unwrap().clone();
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let managed_launch_item = crate::instance::launchd_is_managed(&app_data_dir);
     let show_in_dock_changed = next.show_in_dock != previous.show_in_dock;
     // Write-only field — see `S3Settings`'s doc comment. Non-empty means
     // "the user just typed a new one," goes to the keychain and never
@@ -750,9 +752,7 @@ pub fn set_settings(
             ),
         )?;
     }
-    if next.launch_at_login != previous.launch_at_login
-        && std::env::var_os("SHIFTSHIFT_MANAGED_LAUNCHD").is_none()
-    {
+    if next.launch_at_login != previous.launch_at_login && !managed_launch_item {
         let result = if next.launch_at_login {
             app.autolaunch().enable()
         } else {
@@ -803,7 +803,6 @@ pub fn set_settings(
     next.panel_x = previous.panel_x;
     next.panel_y = previous.panel_y;
     next.panel_placed = previous.panel_placed;
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     settings::save(&app_data_dir, &next)?;
     let dock_enabled = next.dock_enabled;
     *settings.0.lock().unwrap() = next;

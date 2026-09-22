@@ -10,6 +10,7 @@ mod db_encryption;
 mod dock;
 mod export;
 mod images;
+mod instance;
 mod item_drag;
 mod link_preview;
 #[cfg(target_os = "macos")]
@@ -39,6 +40,16 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("resolvable app data dir");
+            let instance_lock = match instance::acquire(&app_data_dir) {
+                Ok(lock) => lock,
+                Err(instance::InstanceLockError::AlreadyRunning) => {
+                    eprintln!("shiftshift: another instance is already running; exiting duplicate");
+                    app.handle().exit(0);
+                    return Ok(());
+                }
+                Err(error) => return Err(Box::new(error)),
+            };
+            app.manage(instance_lock);
 
             let settings = settings::load(&app_data_dir);
             let db = db::Db::open(&app_data_dir, &settings).expect("failed to open store");
@@ -48,7 +59,7 @@ pub fn run() {
             let fallback_capture = settings.fallback_capture.clone();
             let fallback_image = settings.fallback_image.clone();
             let launch_at_login = settings.launch_at_login;
-            let managed_launch_item = std::env::var_os("SHIFTSHIFT_MANAGED_LAUNCHD").is_some();
+            let managed_launch_item = instance::launchd_is_managed(&app_data_dir);
             let show_in_dock = settings.show_in_dock;
             let show_tray_icon = settings.show_tray_icon;
             let dock_enabled = settings.dock_enabled;
