@@ -62,7 +62,7 @@ jobs:
           cargo build --manifest-path src-tauri/Cargo.toml --release --bin shift --target x86_64-apple-darwin
           mkdir -p src-tauri/target/universal-apple-darwin/release
           lipo -create src-tauri/target/aarch64-apple-darwin/release/shift src-tauri/target/x86_64-apple-darwin/release/shift -output src-tauri/target/universal-apple-darwin/release/shift
-          lipo -verify_arch arm64 x86_64 src-tauri/target/universal-apple-darwin/release/shift
+          lipo src-tauri/target/universal-apple-darwin/release/shift -verify_arch arm64 x86_64
       - uses: tauri-apps/tauri-action@v0
         if: steps.version.outputs.published != 'true'
         env:
