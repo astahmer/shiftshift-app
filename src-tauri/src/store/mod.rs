@@ -17,8 +17,13 @@
 //! where that change would land, and no caller code should need to change.
 
 mod folder;
+#[path = "image-assets.rs"]
+mod image_assets;
 mod local;
 mod s3;
+#[cfg(test)]
+#[path = "sync-e2e.rs"]
+mod sync_e2e;
 
 pub use folder::{FolderMergeReport, FolderStore};
 pub use local::LocalSqliteStore;
@@ -267,25 +272,24 @@ pub fn validate_collection(collection: &Collection) -> Result<(), String> {
 /// single source of truth, so no mutation path needs to remember to keep a
 /// separate counter in sync.
 pub fn apply_copy_stats(items: &mut [Item], history: &[HistoryEntry]) {
-    for item in items.iter_mut() {
-        let mut count = 0i64;
-        let mut first: Option<&str> = None;
-        let mut last: Option<&str> = None;
-        for entry in history
-            .iter()
-            .filter(|h| h.action == "used" && h.item_id.as_deref() == Some(item.id.as_str()))
-        {
-            count += 1;
-            if first.is_none_or(|f| entry.at.as_str() < f) {
-                first = Some(entry.at.as_str());
-            }
-            if last.is_none_or(|l| entry.at.as_str() > l) {
-                last = Some(entry.at.as_str());
-            }
-        }
-        item.copy_count = count;
-        item.first_copied_at = first.map(|s| s.to_string());
-        item.last_copied_at = last.map(|s| s.to_string());
+    let mut statistics: std::collections::HashMap<&str, (i64, &str, &str)> =
+        std::collections::HashMap::new();
+    for entry in history.iter().filter(|entry| entry.action == "used") {
+        let Some(item_id) = entry.item_id.as_deref() else {
+            continue;
+        };
+        let statistics = statistics
+            .entry(item_id)
+            .or_insert((0, &entry.at, &entry.at));
+        statistics.0 += 1;
+        statistics.1 = statistics.1.min(&entry.at);
+        statistics.2 = statistics.2.max(&entry.at);
+    }
+    for item in items {
+        let statistics = statistics.get(item.id.as_str());
+        item.copy_count = statistics.map_or(0, |statistics| statistics.0);
+        item.first_copied_at = statistics.map(|statistics| statistics.1.to_string());
+        item.last_copied_at = statistics.map(|statistics| statistics.2.to_string());
     }
 }
 

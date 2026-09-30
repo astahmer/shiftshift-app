@@ -1,3 +1,4 @@
+import { startSyncRefresh } from "./sync-refresh";
 import { getVersion } from "@tauri-apps/api/app";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -252,6 +253,7 @@ let selected = -1;
 let settings: Settings | null = null;
 let refreshInFlight: Promise<void> | null = null;
 let refreshQueued = false;
+let refreshRenderRequested = false;
 const ICLOUD_FOLDER_PATH = "~/Library/Mobile Documents/com~apple~CloudDocs/shiftshift";
 type SyncSetupFeedback = { kind: "success" | "error"; message: string; path?: string };
 let syncSetupFeedback: SyncSetupFeedback | null = null;
@@ -1992,7 +1994,8 @@ function closeDetail(): void {
 	renderList();
 }
 
-async function refresh(): Promise<void> {
+async function refresh(options?: { skipUnchanged: boolean } | void): Promise<void> {
+	refreshRenderRequested ||= !options?.skipUnchanged;
 	if (refreshInFlight) {
 		refreshQueued = true;
 		return refreshInFlight;
@@ -2000,11 +2003,17 @@ async function refresh(): Promise<void> {
 	refreshInFlight = (async () => {
 		do {
 			refreshQueued = false;
-			[items, templatesCache, collections] = await Promise.all([
+			const renderRequested = refreshRenderRequested;
+			refreshRenderRequested = false;
+			const [nextItems, nextTemplates, nextCollections] = await Promise.all([
 				Store.listItems(),
 				Store.listTemplates(),
 				Store.listCollections(),
 			]);
+			if (!renderRequested && JSON.stringify([items, templatesCache, collections]) === JSON.stringify([nextItems, nextTemplates, nextCollections])) continue;
+			items = nextItems;
+			templatesCache = nextTemplates;
+			collections = nextCollections;
 			if (detailItem && !detailView.hidden) {
 				const updated = items.find((i) => i.id === detailItem!.id);
 				if (updated) {
@@ -2513,6 +2522,17 @@ input.addEventListener("paste", (e) => {
 // are also reread when this panel becomes visible again, so iCloud downloads
 // don't require a full app restart to appear.
 listen("refresh", () => void refresh());
+void Store.getSyncStatus().then((status) => {
+    if (status.active_backend === "local") return;
+    const stop = startSyncRefresh({
+        refresh: () => refresh({ skipUnchanged: true }),
+        isVisible: () => getCurrentWindow().isVisible(),
+        intervalMs: status.active_backend === "s3" ? 15000 : 3000,
+        onError: (error) => console.error("Sync refresh failed", error),
+    });
+    window.addEventListener("pagehide", stop, { once: true });
+}).catch((error) => console.error("Sync status unavailable", error));
+
 listen("open-settings", () => {
 	void openSettings();
 });

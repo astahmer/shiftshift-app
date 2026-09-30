@@ -17,20 +17,27 @@
 		"dev": "vite",
 		"build": "tsc && vite build",
 		"tauri": "tauri",
-		"test": "vitest run"
+		"test": "vitest run",
+		"test:sync": "bash scripts/sync-e2e.sh",
+		"lint": "oxlint src",
+		"typecheck": "tsc --noEmit",
+		"fmt": "oxfmt --check src"
 	},
 	"devDependencies": {
 		"@tauri-apps/cli": "2.11.4",
+		"oxfmt": "0.71.0",
+		"oxlint": "1.86.0",
+		"s3rver": "3.7.1",
 		"typescript": "7.0.2",
 		"vite": "8.2.2",
 		"vitest": "4.1.11"
 	},
 	"dependencies": {
 		"@tauri-apps/api": "2.11.1",
-		"@tauri-apps/plugin-global-shortcut": "2.3.2",
 		"@tauri-apps/plugin-autostart": "2.5.1",
+		"@tauri-apps/plugin-global-shortcut": "2.3.2",
+		"@tauri-apps/plugin-process": "2.3.1",
 		"@tauri-apps/plugin-shell": "2.3.5",
-		"@tauri-apps/plugin-updater": "2.11.0",
-		"@tauri-apps/plugin-process": "2.3.1"
+		"@tauri-apps/plugin-updater": "2.11.0"
 	}
 }

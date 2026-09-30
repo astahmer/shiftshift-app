@@ -31,7 +31,7 @@ impl Db {
     pub fn open(app_data_dir: &std::path::Path, settings: &Settings) -> Result<Self, String> {
         std::fs::create_dir_all(app_data_dir).map_err(|e| e.to_string())?;
         if settings.backend == "s3" {
-            match S3Store::open(&settings.s3) {
+            match S3Store::open(&settings.s3, app_data_dir.join("images")) {
                 Ok(store) => {
                     return Ok(Self::from_store(Arc::new(store), "s3", None));
                 }
@@ -48,7 +48,10 @@ impl Db {
             }
         }
         if settings.backend == "folder" {
-            match FolderStore::open(&settings.folder_path) {
+            match FolderStore::open_with_image_cache(
+                &settings.folder_path,
+                app_data_dir.join("images"),
+            ) {
                 Ok(store) => {
                     if let Ok(false) = store.has_items() {
                         if let Ok(local_store) = Self::open_local(app_data_dir, settings) {

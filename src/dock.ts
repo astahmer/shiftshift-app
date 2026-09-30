@@ -1,3 +1,4 @@
+import { startSyncRefresh } from "./sync-refresh";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -266,6 +267,7 @@ let filteredCache: Item[] | null = null;
 let hoveredId: string | null = null;
 let refreshInFlight: Promise<void> | null = null;
 let refreshQueued = false;
+let refreshRenderRequested = false;
 
 const MODE_BADGE_LABELS: Partial<Record<SlashMode["type"], string>> = {
 	theme: "THEME",
@@ -1011,7 +1013,8 @@ function applyExpanded(next: boolean): void {
 	render();
 }
 
-async function refresh(): Promise<void> {
+async function refresh(options?: { skipUnchanged: boolean } | void): Promise<void> {
+	refreshRenderRequested ||= !options?.skipUnchanged;
 	if (refreshInFlight) {
 		refreshQueued = true;
 		return refreshInFlight;
@@ -1019,12 +1022,15 @@ async function refresh(): Promise<void> {
 	refreshInFlight = (async () => {
 		do {
 			refreshQueued = false;
+			const renderRequested = refreshRenderRequested;
+			refreshRenderRequested = false;
 			const [nextSettings, nextItems, nextTemplates, nextThemes] = await Promise.all([
 				Store.getSettings(),
 				Store.listItems(),
 				Store.listTemplates(),
 				Store.listCustomThemes(),
 			]);
+			if (!renderRequested && JSON.stringify([settings, items, templatesCache, customThemesCache]) === JSON.stringify([nextSettings, nextItems, nextTemplates, nextThemes])) continue;
 			settings = nextSettings;
 			applyComposerSpellcheck(nextSettings.input_spellcheck);
 			items = nextItems;
@@ -1049,6 +1055,17 @@ async function refresh(): Promise<void> {
 void refresh();
 
 listen("refresh", () => void refresh());
+void Store.getSyncStatus().then((status) => {
+    if (status.active_backend === "local") return;
+    const stop = startSyncRefresh({
+        refresh: () => refresh({ skipUnchanged: true }),
+        isVisible: () => getCurrentWindow().isVisible(),
+        intervalMs: status.active_backend === "s3" ? 15000 : 3000,
+        onError: (error) => console.error("Sync refresh failed", error),
+    });
+    window.addEventListener("pagehide", stop, { once: true });
+}).catch((error) => console.error("Sync status unavailable", error));
+
 listen<boolean>("dock-set-expanded", (event) => {
 	applyExpanded(event.payload);
 	if (event.payload) void refresh();

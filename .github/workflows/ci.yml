@@ -27,6 +27,8 @@ jobs:
       - uses: pnpm/action-setup@v4
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc --noEmit
+      - run: pnpm lint
+      - run: pnpm fmt
       - run: pnpm test
       - run: pnpm run build
 
@@ -76,3 +78,12 @@ jobs:
             libx11-dev libxtst-dev libxi-dev libxdo-dev
       - run: cargo build --lib
       - run: cargo test --lib
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+      - name: Folder and S3 sync end-to-end
+        run: bash scripts/sync-e2e.sh
+        working-directory: .

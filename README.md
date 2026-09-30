@@ -263,26 +263,45 @@ work.
 ## Testing
 
 ```bash
-cd src-tauri
-cargo test
+pnpm test
+pnpm lint
+pnpm typecheck
+pnpm fmt
+nix develop --command cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+nix develop --command pnpm test:sync
 ```
 
-Covers the double-Shift and triple-tap gesture state machine (`mac_tap.rs`),
-the local SQLite store CRUD, fractional reordering, and undo/redo primitives
-(`restore_item`/`set_rank`) (`store/local.rs`, `store/mod.rs`), the derived
-copy-tracking stats (`apply_copy_stats`), settings/template/custom-theme
-persistence, Markdown export formatting, the notification excerpt
-formatting, the CLI's line-capture logic, the link-preview title/favicon
-HTML scraping (`link_preview.rs`), and the S3 backend's config validation
-(59 tests — the S3 backend's actual network calls are not covered; see
-`store/s3.rs`'s module doc).
+`test:sync` starts a pinned local S3-compatible server on loopback and runs
+folder and S3 lifecycle tests with independent clients and separate image
+caches. It covers remote creates, edits, tags, bookmarks, ranks, completion,
+collections, history, deletion, undo, PNG transfer, and reopening stores.
+No production bucket, cloud account, or OS keychain credential is used.
+Set `SHIFTSHIFT_TEST_S3_PORT` if port 4569 is already in use.
 
-Frontend logic (kind detection, template expansion, capture resolution, list
-filtering/sorting, duplicate detection, the unified `/`-suggestion-mode
-parser, theme/sort/`@`/`#`-suggestion matching, relative-time formatting,
-inline Markdown/hashtag parsing, and custom-theme import validation) has 67
-Vitest unit tests:
+Other regression checks verify atomic folder writes while another client
+reads, unchanged-record caching, recovery after malformed external JSON,
+bounded polling while visible, retries after failures, and async command
+responsiveness while storage work waits. CI runs the S3 service tests on Linux.
+These tests exercise storage and scheduling; they do not automate a native
+webview or prove an external iCloud/Dropbox client's delivery latency.
+
+Folder and S3 backends support sequential writes from multiple clients.
+Concurrent edits to the same record still use last-writer behavior. New image
+captures and local-to-folder merges publish portable image references and
+assets. Existing remote records with absolute image paths retain their old
+format; those images are only available on the machine that owns the path.
+
+## Build size
+
+Release builds strip symbols automatically. For additional size optimization:
 
 ```bash
-pnpm test
+nix develop --command cargo build --manifest-path src-tauri/Cargo.toml --profile release-small
 ```
+
+`release-small` enables ThinLTO, one codegen unit, and size optimization. It
+trades build time and potentially runtime speed for smaller executables. Its
+output is under `src-tauri/target/release-small`; normal packaging continues
+to use the standard release profile. Symbol stripping also removes symbol
+names useful for diagnosing native crashes, so retain debug builds for
+investigation.

@@ -11,9 +11,13 @@
 //! client round-trips in seconds rather than requiring an explicit push,
 //! but it is not a CRDT and doesn't pretend to be one.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
+
+use super::image_assets::{write_bytes, ImageAssets};
 
 use super::{
     apply_copy_stats, compute_move_rank, Collection, HistoryEntry, Item, ItemKind, MoveDirection,
@@ -22,8 +26,76 @@ use super::{
 
 pub struct FolderStore {
     items_dir: PathBuf,
+    assets_dir: PathBuf,
+    images: ImageAssets,
     history_dir: PathBuf,
     collections_dir: PathBuf,
+    items_cache: Mutex<RecordCache<Item>>,
+    history_cache: Mutex<RecordCache<HistoryEntry>>,
+    collections_cache: Mutex<RecordCache<Collection>>,
+}
+
+struct CachedRecord<T> {
+    modified: SystemTime,
+    length: u64,
+    value: T,
+}
+
+type RecordCache<T> = HashMap<PathBuf, CachedRecord<T>>;
+
+fn read_records<T: serde::de::DeserializeOwned + Clone>(
+    directory: &Path,
+    cache: &Mutex<RecordCache<T>>,
+) -> Result<Vec<T>, String> {
+    let mut cache = cache.lock().map_err(|error| error.to_string())?;
+    let mut present = HashSet::new();
+    let mut records = Vec::new();
+    for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        let modified = metadata.modified().map_err(|error| error.to_string())?;
+        let length = metadata.len();
+        let unchanged = cache
+            .get(&path)
+            .filter(|record| record.modified == modified && record.length == length);
+        let value = match unchanged {
+            Some(record) => record.value.clone(),
+            None => {
+                let raw = match fs::read(&path) {
+                    Ok(raw) => raw,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.to_string()),
+                };
+                let value: T = serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
+                cache.insert(
+                    path.clone(),
+                    CachedRecord {
+                        modified,
+                        length,
+                        value: value.clone(),
+                    },
+                );
+                value
+            }
+        };
+        present.insert(path);
+        records.push(value);
+    }
+    cache.retain(|path, _| present.contains(path));
+    Ok(records)
+}
+
+fn write_record<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    write_bytes(path, &bytes)
 }
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
@@ -60,6 +132,7 @@ impl FolderStore {
         fs::create_dir_all(root.join("items")).map_err(|e| e.to_string())?;
         fs::create_dir_all(root.join("history")).map_err(|e| e.to_string())?;
         fs::create_dir_all(root.join("collections")).map_err(|e| e.to_string())?;
+        fs::create_dir_all(root.join("assets")).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -73,12 +146,23 @@ impl FolderStore {
     }
 
     pub fn open(folder_path: &str) -> Result<Self, String> {
+        let image_cache =
+            std::env::temp_dir().join(format!("shiftshift-image-cache-{}", uuid::Uuid::new_v4()));
+        Self::open_with_image_cache(folder_path, image_cache)
+    }
+
+    pub fn open_with_image_cache(folder_path: &str, image_cache: PathBuf) -> Result<Self, String> {
         let root = Self::root_for(folder_path)?;
         Self::ensure_layout(&root)?;
         Ok(Self {
             items_dir: root.join("items"),
+            assets_dir: root.join("assets"),
+            images: ImageAssets::new(image_cache)?,
             history_dir: root.join("history"),
             collections_dir: root.join("collections"),
+            items_cache: Mutex::new(HashMap::new()),
+            history_cache: Mutex::new(HashMap::new()),
+            collections_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -106,50 +190,39 @@ impl FolderStore {
 
     fn read_item(&self, id: &str) -> Result<Item, String> {
         let raw = fs::read_to_string(self.item_path(id)).map_err(|e| e.to_string())?;
-        serde_json::from_str(&raw).map_err(|e| e.to_string())
+        let mut item = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        self.resolve_image(&mut item)?;
+        Ok(item)
+    }
+
+    fn resolve_image(&self, item: &mut Item) -> Result<(), String> {
+        self.images.resolve(item, |identifier| {
+            fs::read(self.assets_dir.join(format!("{identifier}.png")))
+                .map_err(|error| error.to_string())
+        })
     }
 
     fn write_item(&self, item: &Item) -> Result<(), String> {
-        let json = serde_json::to_string_pretty(item).map_err(|e| e.to_string())?;
-        fs::write(self.item_path(&item.id), json).map_err(|e| e.to_string())
+        let encoded = self.images.encode(item, |identifier, bytes| {
+            write_bytes(&self.assets_dir.join(format!("{identifier}.png")), bytes)
+        })?;
+        write_record(&self.item_path(&item.id), &encoded)
     }
 
     fn read_all_items(&self) -> Result<Vec<Item>, String> {
-        let mut items = Vec::new();
-        for entry in fs::read_dir(&self.items_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let raw = fs::read_to_string(entry.path()).map_err(|e| e.to_string())?;
-            items.push(serde_json::from_str::<Item>(&raw).map_err(|e| e.to_string())?);
+        let mut items = read_records(&self.items_dir, &self.items_cache)?;
+        for item in &mut items {
+            self.resolve_image(item)?;
         }
         Ok(items)
     }
 
     fn read_all_history(&self) -> Result<Vec<HistoryEntry>, String> {
-        let mut entries = Vec::new();
-        for entry in fs::read_dir(&self.history_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let raw = fs::read_to_string(entry.path()).map_err(|e| e.to_string())?;
-            entries.push(serde_json::from_str::<HistoryEntry>(&raw).map_err(|e| e.to_string())?);
-        }
-        Ok(entries)
+        read_records(&self.history_dir, &self.history_cache)
     }
 
     fn read_all_collections(&self) -> Result<Vec<Collection>, String> {
-        let mut collections = Vec::new();
-        for entry in fs::read_dir(&self.collections_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let raw = fs::read_to_string(entry.path()).map_err(|e| e.to_string())?;
-            collections.push(serde_json::from_str::<Collection>(&raw).map_err(|e| e.to_string())?);
-        }
+        let mut collections = read_records(&self.collections_dir, &self.collections_cache)?;
         collections.sort_by(|a, b| {
             b.rank
                 .total_cmp(&a.rank)
@@ -159,13 +232,11 @@ impl FolderStore {
     }
 
     fn write_collection(&self, collection: &Collection) -> Result<(), String> {
-        let json = serde_json::to_string_pretty(collection).map_err(|e| e.to_string())?;
-        fs::write(self.collection_path(&collection.id), json).map_err(|e| e.to_string())
+        write_record(&self.collection_path(&collection.id), collection)
     }
 
     fn write_history(&self, entry: &HistoryEntry) -> Result<(), String> {
-        let json = serde_json::to_string_pretty(entry).map_err(|e| e.to_string())?;
-        fs::write(self.history_path(&entry.id), json).map_err(|e| e.to_string())
+        write_record(&self.history_path(&entry.id), entry)
     }
 
     /// Adds records that are missing from this folder without deleting or
@@ -273,7 +344,7 @@ impl Store for FolderStore {
             last_copied_at: None,
         };
         self.write_item(&item)?;
-        Ok(item)
+        self.read_item(&item.id)
     }
 
     fn toggle_done(&self, id: &str) -> Result<(), String> {
@@ -350,8 +421,7 @@ impl Store for FolderStore {
             detail: detail.map(|s| s.to_string()),
             at: chrono::Utc::now().to_rfc3339(),
         };
-        let json = serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?;
-        fs::write(self.history_path(&entry.id), json).map_err(|e| e.to_string())
+        self.write_history(&entry)
     }
 
     fn list_history(&self, limit: u32) -> Result<Vec<HistoryEntry>, String> {
@@ -365,6 +435,53 @@ impl Store for FolderStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readers_never_observe_partial_local_writes() {
+        let writer = store();
+        let root = writer.items_dir.parent().unwrap().to_path_buf();
+        let reader = FolderStore::open(root.to_str().unwrap()).unwrap();
+        let item = writer.add_item("initial", ItemKind::Note, None).unwrap();
+        std::thread::scope(|scope| {
+            let item_id = &item.id;
+            let writer_thread = scope.spawn(|| {
+                for index in 0..100 {
+                    writer
+                        .update_text(item_id, &format!("{index}:{}", "x".repeat(32000)))
+                        .unwrap();
+                }
+            });
+            while !writer_thread.is_finished() {
+                let records = reader.list_items().unwrap();
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].id, item.id);
+            }
+            writer_thread.join().unwrap();
+        });
+        assert!(reader.list_items().unwrap()[0].text.starts_with("99:"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unchanged_files_reuse_decoded_records_and_invalid_changes_fail_loudly() {
+        let store = store();
+        let item = store.add_item("cached", ItemKind::Note, None).unwrap();
+        store.list_items().unwrap();
+        store
+            .items_cache
+            .lock()
+            .unwrap()
+            .get_mut(&store.item_path(&item.id))
+            .unwrap()
+            .value
+            .text = "cache hit".into();
+        assert_eq!(store.list_items().unwrap()[0].text, "cache hit");
+        fs::write(store.item_path(&item.id), "invalid external JSON").unwrap();
+        assert!(store.list_items().is_err());
+        write_record(&store.item_path(&item.id), &item).unwrap();
+        assert_eq!(store.list_items().unwrap()[0].text, "cached");
+        fs::remove_dir_all(store.items_dir.parent().unwrap()).unwrap();
+    }
 
     fn store() -> FolderStore {
         let dir =

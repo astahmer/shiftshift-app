@@ -37,12 +37,14 @@ where
 
 #[tauri::command]
 pub async fn list_items(db: State<'_, Db>) -> Result<Vec<Item>, String> {
-    run_store(db, |store| store.list_items()).await
+    let store = db.store.clone();
+    run_blocking(move || store.list_items()).await
 }
 
 #[tauri::command]
 pub async fn list_collections(db: State<'_, Db>) -> Result<Vec<Collection>, String> {
-    run_store(db, |store| store.list_collections()).await
+    let store = db.store.clone();
+    run_blocking(move || store.list_collections()).await
 }
 
 #[tauri::command]
@@ -1023,4 +1025,50 @@ pub fn replace_custom_themes(
 fn persist_custom_themes(app: &AppHandle, themes: &[CustomTheme]) -> Result<(), String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     custom_themes::save(&app_data_dir, themes)
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
+
+    #[test]
+    fn slow_store_io_does_not_block_async_commands() {
+        let root =
+            std::env::temp_dir().join(format!("shiftshift-blocking-e2e-{}", uuid::Uuid::new_v4()));
+        let store = FolderStore::open(root.to_str().unwrap()).unwrap();
+        let gate = Arc::new(Mutex::new(()));
+        let guard = gate.lock().unwrap();
+        let worker_gate = gate.clone();
+        let (started_sender, started_receiver) = mpsc::channel();
+        let operation = tauri::async_runtime::spawn(async move {
+            run_blocking(move || {
+                started_sender.send(()).unwrap();
+                let _guard = worker_gate.lock().unwrap();
+                store.add_item("saved after slow sync", ItemKind::Note, None)
+            })
+            .await
+        });
+        started_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        let (responsive_sender, responsive_receiver) = mpsc::channel();
+        tauri::async_runtime::spawn(async move {
+            responsive_sender.send(()).unwrap();
+        });
+        let responsive = responsive_receiver.recv_timeout(Duration::from_secs(2));
+        drop(guard);
+        let item = tauri::async_runtime::block_on(operation).unwrap().unwrap();
+        assert!(responsive.is_ok());
+        assert_eq!(
+            FolderStore::open(root.to_str().unwrap())
+                .unwrap()
+                .list_items()
+                .unwrap()[0]
+                .id,
+            item.id
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
