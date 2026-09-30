@@ -7,6 +7,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   frontend:
@@ -17,8 +25,6 @@ jobs:
         with:
           node-version: 24.19.0
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12.1.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc --noEmit
       - run: pnpm test
@@ -34,6 +40,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.93.0"
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
       - run: cargo build --lib
       - run: cargo test --lib
       - run: cargo clippy --lib
@@ -54,6 +64,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.93.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
       - name: Install Tauri Linux build deps
         run: |
           sudo apt-get update
