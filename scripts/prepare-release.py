@@ -43,15 +43,17 @@ def main():
     releases = [release for page in pages for release in page]
     tag, existing = select_release(releases=releases, commit=commit, minimum="0.1.1")
     if existing is None:
-        subprocess.run([
-            "gh", "release", "create", tag, "--repo", repository, "--target", commit,
-            "--draft", "--title", f"shiftshift {tag}", "--notes",
-            f"Source commit: {commit}\n\nAutomated macOS release. Apple code signing and notarization are not configured."
-        ], check=True)
-        existing = json.loads(subprocess.check_output([
-            "gh", "api", f"repos/{repository}/releases", "--jq",
-            f'.[] | select(.tag_name == "{tag}")'
-        ]))
+        payload = {
+            "tag_name": tag,
+            "target_commitish": commit,
+            "draft": True,
+            "name": f"shiftshift {tag}",
+            "body": f"Source commit: {commit}\n\nAutomated macOS release. Apple code signing and notarization are not configured.",
+        }
+        response = subprocess.run([
+            "gh", "api", f"repos/{repository}/releases", "--method", "POST", "--input", "-"
+        ], input=json.dumps(payload), text=True, capture_output=True, check=True)
+        existing = json.loads(response.stdout)
     version = tag.removeprefix("v")
     write_version(root=Path.cwd(), version=version)
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
