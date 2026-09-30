@@ -39,8 +39,6 @@ jobs:
           targets: "x86_64-apple-darwin,aarch64-apple-darwin"
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12.1.0
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
