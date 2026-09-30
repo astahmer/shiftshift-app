@@ -48,7 +48,7 @@ release uses a newly configured key; older locally installed builds need a
 manual replacement before using this signing identity.
 
 Apple code signing and notarization are not configured. Automated releases use
-a dedicated Tauri config with signing identity unset, producing unsigned
+an ad-hoc signing identity when no Apple identity is configured, producing
 downloads; macOS may require manual approval to open them. For
 Developer ID signing and notarization, configure these repository Actions
 secrets from an Apple Developer account:
