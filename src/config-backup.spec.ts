@@ -18,20 +18,20 @@ const settings = {
 			id: "auto-classify",
 			enabled: true,
 			events: ["item.created"],
-		command: "/Users/me/bin/shiftshift-classify",
-		args: [],
-		timeout_ms: 10000,
-		views: [
-			{
-				id: "work-queue",
-				label: "Work queue",
-				description: "Unfinished work",
-				icon: "▣",
-				sort: "newest",
-				enabled: true,
-				query: { all: [], any: [], none: [] },
-			},
-		],
+			command: "/Users/me/bin/shiftshift-classify",
+			args: [],
+			timeout_ms: 10000,
+			views: [
+				{
+					id: "work-queue",
+					label: "Work queue",
+					description: "Unfinished work",
+					icon: "▣",
+					sort: "newest",
+					enabled: true,
+					query: { all: [], any: [], none: [] },
+				},
+			],
 		},
 	],
 } as unknown as Settings;
@@ -73,7 +73,9 @@ describe("config backup", () => {
 	});
 
 	it("keeps older settings-only exports compatible", () => {
-		const parsed = parseConfigBackup({ settings: { bindings: settings.bindings, theme: "dracula" } });
+		const parsed = parseConfigBackup({
+			settings: { bindings: settings.bindings, theme: "dracula" },
+		});
 
 		expect(parsed.settings.theme).toBe("dracula");
 		expect(parsed.templates).toBeUndefined();
@@ -81,6 +83,8 @@ describe("config backup", () => {
 	});
 
 	it("rejects an unsupported version", () => {
-		expect(() => parseConfigBackup({ version: 2, settings })).toThrow("unsupported config backup version");
+		expect(() => parseConfigBackup({ version: 2, settings })).toThrow(
+			"unsupported config backup version",
+		);
 	});
 });

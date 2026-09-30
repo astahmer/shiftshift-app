@@ -118,7 +118,10 @@ export function getTheme(id: ThemeId): ThemeDef {
 /** Same family, other mode; falls back to the first theme of `mode`. */
 export function siblingTheme(id: ThemeId, mode: ThemeMode): ThemeId {
 	const current = getTheme(id);
-	return THEMES.find((t) => t.family === current.family && t.mode === mode)?.id ?? THEMES.find((t) => t.mode === mode)!.id;
+	return (
+		THEMES.find((t) => t.family === current.family && t.mode === mode)?.id ??
+		THEMES.find((t) => t.mode === mode)!.id
+	);
 }
 
 /** Finds a theme by label or id, case-insensitively — used by `/theme <name>`. */
@@ -209,7 +212,12 @@ export function findThemeByName(query: string): ThemeDef | null {
 		THEMES.find((t) => t.label.toLowerCase() === q) ??
 		THEMES.find((t) => t.id.replace(/[\s_-]+/g, "") === compact) ??
 		THEMES.find((t) => t.label.toLowerCase().includes(q)) ??
-		THEMES.find((t) => t.label.toLowerCase().replace(/[\s_-]+/g, "").includes(compact)) ??
+		THEMES.find((t) =>
+			t.label
+				.toLowerCase()
+				.replace(/[\s_-]+/g, "")
+				.includes(compact),
+		) ??
 		null
 	);
 }

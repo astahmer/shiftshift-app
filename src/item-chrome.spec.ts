@@ -50,33 +50,38 @@ describe("hover actions", () => {
 	});
 
 	it("omits todo/edit on images", () => {
-		expect(hoverActionDefs(item({ text: "/tmp/a.png", kind: "image" })).map((action) => action.id)).toEqual([
-			"preview",
-			"bookmark",
-			"share",
-			"delete",
-		]);
+		expect(
+			hoverActionDefs(item({ text: "/tmp/a.png", kind: "image" })).map((action) => action.id),
+		).toEqual(["preview", "bookmark", "share", "delete"]);
 	});
 
 	it("adds external opening for links", () => {
-		expect(hoverActionDefs(item({ text: "https://example.com", kind: "link" })).map((action) => action.id)).toEqual([
-			"preview",
-			"bookmark",
-			"open",
-			"todo",
-			"edit",
-			"share",
-			"delete",
-		]);
+		expect(
+			hoverActionDefs(item({ text: "https://example.com", kind: "link" })).map(
+				(action) => action.id,
+			),
+		).toEqual(["preview", "bookmark", "open", "todo", "edit", "share", "delete"]);
 	});
 });
 
 describe("context menu", () => {
 	it("includes hover actions plus selection commands", () => {
-		const ids = itemContextEntries(item({ text: "note" }), { inSelection: false, selectionCount: 0 })
+		const ids = itemContextEntries(item({ text: "note" }), {
+			inSelection: false,
+			selectionCount: 0,
+		})
 			.filter((entry) => entry.type === "item")
 			.map((entry) => entry.id);
-		expect(ids).toEqual(["preview", "bookmark", "todo", "edit", "share", "delete", "select", "select_all"]);
+		expect(ids).toEqual([
+			"preview",
+			"bookmark",
+			"todo",
+			"edit",
+			"share",
+			"delete",
+			"select",
+			"select_all",
+		]);
 	});
 
 	it("adds bulk actions once a selection exists", () => {
@@ -91,7 +96,10 @@ describe("context menu", () => {
 	});
 
 	it("offers external opening for links", () => {
-		const ids = itemContextEntries(item({ text: "https://example.com", kind: "link" }), { inSelection: false, selectionCount: 0 })
+		const ids = itemContextEntries(item({ text: "https://example.com", kind: "link" }), {
+			inSelection: false,
+			selectionCount: 0,
+		})
 			.filter((entry) => entry.type === "item")
 			.map((entry) => entry.id);
 		expect(ids).toContain("open");

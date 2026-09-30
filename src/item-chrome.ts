@@ -18,7 +18,11 @@ export function pointerOnScrollbar(el: HTMLElement, clientX: number): boolean {
 
 export const NOTCH_PAGE_SIZE = 40;
 
-export function nextNotchLoadedCount(loaded: number, total: number, page = NOTCH_PAGE_SIZE): number {
+export function nextNotchLoadedCount(
+	loaded: number,
+	total: number,
+	page = NOTCH_PAGE_SIZE,
+): number {
 	return Math.min(total, Math.max(loaded, 0) + page);
 }
 
@@ -38,7 +42,9 @@ export function stepLoadedSelection(
 	let nextLoaded = Math.min(Math.max(loaded, 0), total);
 	if (nextLoaded === 0) nextLoaded = Math.min(page, total);
 	if (selected < 0) {
-		return delta > 0 ? { selected: 0, loaded: nextLoaded } : { selected: nextLoaded - 1, loaded: nextLoaded };
+		return delta > 0
+			? { selected: 0, loaded: nextLoaded }
+			: { selected: nextLoaded - 1, loaded: nextLoaded };
 	}
 	const next = selected + delta;
 	if (next >= nextLoaded) {
@@ -95,9 +101,14 @@ export function hoverActionDefs(item: Item): HoverActionDef[] {
 	return actions;
 }
 
-export type ContextEntry = { type: "sep" } | { type: "item"; id: string; label: string; hint?: string };
+export type ContextEntry =
+	| { type: "sep" }
+	| { type: "item"; id: string; label: string; hint?: string };
 
-export function itemContextEntries(item: Item, opts: { inSelection: boolean; selectionCount: number }): ContextEntry[] {
+export function itemContextEntries(
+	item: Item,
+	opts: { inSelection: boolean; selectionCount: number },
+): ContextEntry[] {
 	const entries: ContextEntry[] = hoverActionDefs(item).map((action) => ({
 		type: "item" as const,
 		id: action.id,
@@ -119,8 +130,18 @@ export function itemContextEntries(item: Item, opts: { inSelection: boolean; sel
 			label: `Copy selection (${opts.selectionCount})`,
 			hint: "⏎",
 		});
-		entries.push({ type: "item", id: "bookmark_selection", label: "Bookmark selected", hint: "⌘B" });
-		entries.push({ type: "item", id: "todo_selection", label: "Convert selected to todos", hint: "⌘T" });
+		entries.push({
+			type: "item",
+			id: "bookmark_selection",
+			label: "Bookmark selected",
+			hint: "⌘B",
+		});
+		entries.push({
+			type: "item",
+			id: "todo_selection",
+			label: "Convert selected to todos",
+			hint: "⌘T",
+		});
 		entries.push({ type: "item", id: "tag_selection", label: "Tag selected..." });
 		entries.push({ type: "item", id: "delete_selection", label: "Delete selected", hint: "⌘⌫" });
 	}
@@ -170,7 +191,11 @@ export function closeItemContextMenu(): void {
 	openMenu = null;
 }
 
-export function openItemContextMenu(event: MouseEvent, entries: ContextEntry[], onPick: (id: string) => void): void {
+export function openItemContextMenu(
+	event: MouseEvent,
+	entries: ContextEntry[],
+	onPick: (id: string) => void,
+): void {
 	event.preventDefault();
 	closeItemContextMenu();
 	const menu = document.createElement("div");
@@ -253,7 +278,9 @@ export function openCommandPalette(entries: ContextEntry[], onPick: (id: string)
 	closeItemContextMenu();
 	closeCommandPalette();
 
-	const actions = entries.filter((entry): entry is Extract<ContextEntry, { type: "item" }> => entry.type === "item");
+	const actions = entries.filter(
+		(entry): entry is Extract<ContextEntry, { type: "item" }> => entry.type === "item",
+	);
 	let shown = actions;
 	let activeIndex = 0;
 
@@ -316,7 +343,14 @@ export function openCommandPalette(entries: ContextEntry[], onPick: (id: string)
 		shown = query
 			? actions
 					.map((entry) => ({ entry, match: fuzzyMatch(query, entry.label) }))
-					.filter((r): r is { entry: (typeof actions)[number]; match: NonNullable<ReturnType<typeof fuzzyMatch>> } => r.match !== null)
+					.filter(
+						(
+							r,
+						): r is {
+							entry: (typeof actions)[number];
+							match: NonNullable<ReturnType<typeof fuzzyMatch>>;
+						} => r.match !== null,
+					)
 					.sort((a, b) => b.match.score - a.match.score)
 					.map((r) => r.entry)
 			: actions;

@@ -108,7 +108,10 @@ describe("resolveCapture", () => {
 	});
 
 	it("falls back to literal text when no template matches the slash command", () => {
-		expect(resolveCapture("/unknown foo", templates)).toEqual({ text: "/unknown foo", kind: "note" });
+		expect(resolveCapture("/unknown foo", templates)).toEqual({
+			text: "/unknown foo",
+			kind: "note",
+		});
 	});
 
 	it("classifies an expanded template as a link when it resolves to a URL", () => {
@@ -202,20 +205,26 @@ describe("list tabs", () => {
 
 	it("scopes the list to the active tab", () => {
 		expect(itemsForTab(items, "recent")).toEqual(items);
-		expect(itemsForTab(items, "bookmarked").map((row) => row.text)).toEqual(["https://example.com"]);
+		expect(itemsForTab(items, "bookmarked").map((row) => row.text)).toEqual([
+			"https://example.com",
+		]);
 		expect(itemsForTab(items, "images").map((row) => row.text)).toEqual(["shot"]);
 		expect(itemsForTab(items, "todos").map((row) => row.text)).toEqual(["buy milk"]);
 	});
 
 	it("scopes a per-tag tab to items carrying that tag", () => {
 		expect(itemsForTab(items, "tag:work").map((row) => row.text)).toEqual(["idea #work"]);
-		expect(itemsForTab(items, "tag:urgent").map((row) => row.text)).toEqual(["call mom #home #urgent"]);
+		expect(itemsForTab(items, "tag:urgent").map((row) => row.text)).toEqual([
+			"call mom #home #urgent",
+		]);
 	});
 
 	it("scopes the combined tags tab to the union of selected tags", () => {
 		expect(itemsForTab(items, "tags")).toEqual([]);
 		expect(itemsForTab(items, "tags", new Set())).toEqual([]);
-		expect(itemsForTab(items, "tags", new Set(["work"])).map((row) => row.text)).toEqual(["idea #work"]);
+		expect(itemsForTab(items, "tags", new Set(["work"])).map((row) => row.text)).toEqual([
+			"idea #work",
+		]);
 		expect(itemsForTab(items, "tags", new Set(["work", "home"])).map((row) => row.text)).toEqual([
 			"idea #work",
 			"call mom #home #urgent",
@@ -268,7 +277,12 @@ describe("list tabs", () => {
 	});
 
 	it("evaluates collection and plugin queries against first-class tags", () => {
-		const tagged = item({ text: "send the report", kind: "todo", tags: ["Work"], source_app: "Mail" });
+		const tagged = item({
+			text: "send the report",
+			kind: "todo",
+			tags: ["Work"],
+			source_app: "Mail",
+		});
 		const query = {
 			all: [
 				{ field: "tag" as const, operator: "equals" as const, value: "work" },
@@ -278,12 +292,40 @@ describe("list tabs", () => {
 			none: [{ field: "bookmarked" as const, operator: "equals" as const, value: "true" }],
 		};
 		expect(matchesCollectionQuery(tagged, query)).toBe(true);
-		expect(itemsForTab([tagged], "collection:work", undefined, [
-			{ id: "work", name: "Work", query, sort: "manual", rank: 0, icon: null, color: null, created_at: "", updated_at: "" },
-		])).toEqual([tagged]);
-		expect(itemsForTab([tagged], "automation:organizer:follow-up", undefined, [], [
-			{ id: "organizer:follow-up", label: "Follow-up", description: "", icon: "", query, sort: "manual", enabled: true },
-		])).toEqual([tagged]);
+		expect(
+			itemsForTab([tagged], "collection:work", undefined, [
+				{
+					id: "work",
+					name: "Work",
+					query,
+					sort: "manual",
+					rank: 0,
+					icon: null,
+					color: null,
+					created_at: "",
+					updated_at: "",
+				},
+			]),
+		).toEqual([tagged]);
+		expect(
+			itemsForTab(
+				[tagged],
+				"automation:organizer:follow-up",
+				undefined,
+				[],
+				[
+					{
+						id: "organizer:follow-up",
+						label: "Follow-up",
+						description: "",
+						icon: "",
+						query,
+						sort: "manual",
+						enabled: true,
+					},
+				],
+			),
+		).toEqual([tagged]);
 	});
 
 	it("wraps Tab cycling in both directions", () => {
@@ -336,14 +378,23 @@ describe("applySort", () => {
 	});
 
 	it("keeps bookmarked items pinned above unbookmarked ones regardless of sort mode", () => {
-		const mixed = [item({ text: "zzz", bookmarked: true }), item({ text: "aaa", bookmarked: false })];
+		const mixed = [
+			item({ text: "zzz", bookmarked: true }),
+			item({ text: "aaa", bookmarked: false }),
+		];
 		expect(applySort(mixed, "az").map((i) => i.text)).toEqual(["zzz", "aaa"]);
 	});
 });
 
 describe("matchSortSuggestions", () => {
 	it("returns all options for an empty query", () => {
-		expect(matchSortSuggestions("").map((o) => o.mode)).toEqual(["manual", "newest", "oldest", "az", "za"]);
+		expect(matchSortSuggestions("").map((o) => o.mode)).toEqual([
+			"manual",
+			"newest",
+			"oldest",
+			"az",
+			"za",
+		]);
 	});
 
 	it("narrows by label substring", () => {
@@ -368,7 +419,17 @@ describe("matchSlashSuggestions", () => {
 	it("returns everything for a bare slash", () => {
 		const names = matchSlashSuggestions("/", templates).map((s) => s.name);
 		expect(names).toEqual(
-			expect.arrayContaining(["todo", "settings", "light", "dark", "theme", "sort", "history", "help", "standup"]),
+			expect.arrayContaining([
+				"todo",
+				"settings",
+				"light",
+				"dark",
+				"theme",
+				"sort",
+				"history",
+				"help",
+				"standup",
+			]),
 		);
 	});
 
@@ -481,7 +542,13 @@ describe("matchAtSuggestions", () => {
 	});
 
 	it("returns everything for a bare @", () => {
-		expect(matchAtSuggestions("@").map((t) => t.tag)).toEqual(["bookmarks", "links", "todos", "notes", "images"]);
+		expect(matchAtSuggestions("@").map((t) => t.tag)).toEqual([
+			"bookmarks",
+			"links",
+			"todos",
+			"notes",
+			"images",
+		]);
 	});
 });
 
@@ -565,7 +632,9 @@ describe("copyableItemText", () => {
 		expect(copyableItemText(item({ kind: "link", text: "https://example.com/#section" }))).toBe(
 			"https://example.com/#section",
 		);
-		expect(copyableItemText(item({ kind: "image", text: "/tmp/shot#1.png" }))).toBe("/tmp/shot#1.png");
+		expect(copyableItemText(item({ kind: "image", text: "/tmp/shot#1.png" }))).toBe(
+			"/tmp/shot#1.png",
+		);
 	});
 
 	it("does not remove hashtag-looking text inside code or emphasis", () => {
@@ -586,7 +655,10 @@ describe("extractTags", () => {
 	});
 
 	it("includes first-class metadata tags alongside legacy inline tags", () => {
-		expect(extractTags([item({ text: "plain note", tags: ["Work", "project-x"] })])).toEqual(["project-x", "work"]);
+		expect(extractTags([item({ text: "plain note", tags: ["Work", "project-x"] })])).toEqual([
+			"project-x",
+			"work",
+		]);
 	});
 });
 
@@ -603,7 +675,15 @@ describe("matchHashSuggestions", () => {
 });
 
 describe("isImportableTheme", () => {
-	const colors = { bg: "#000", fg: "#fff", muted: "#888", row_bg: "#111", accent: "#5af", accent_fg: "#000", border: "#222" };
+	const colors = {
+		bg: "#000",
+		fg: "#fff",
+		muted: "#888",
+		row_bg: "#111",
+		accent: "#5af",
+		accent_fg: "#000",
+		border: "#222",
+	};
 
 	it("accepts a well-formed theme", () => {
 		expect(isImportableTheme({ name: "Midnight", mode: "dark", colors })).toBe(true);
@@ -642,8 +722,12 @@ describe("settingsSearchMatches", () => {
 		expect(settingsSearchMatches("sync", "Encrypt local database")).toBe(true);
 		expect(settingsSearchMatches("snippet", "Snippet templates")).toBe(true);
 		expect(settingsSearchMatches("font", "Appearance theme look")).toBe(true);
-		expect(settingsSearchMatches("spellcheck", "Autocorrect / spellcheck on the capture input")).toBe(true);
-		expect(settingsSearchMatches("bonjour", "Autocorrect / spellcheck on the capture input")).toBe(true);
+		expect(
+			settingsSearchMatches("spellcheck", "Autocorrect / spellcheck on the capture input"),
+		).toBe(true);
+		expect(settingsSearchMatches("bonjour", "Autocorrect / spellcheck on the capture input")).toBe(
+			true,
+		);
 	});
 });
 
@@ -679,7 +763,13 @@ describe("rankForDrop", () => {
 describe("list drag gesture e2e", () => {
 	it("keeps a note in-list so it can be rearranged", () => {
 		let state = applyListDrag(null, { type: "down", id: "a", index: 0, x: 10, y: 10 }).state;
-		const start = applyListDrag(state, { type: "move", x: 10, y: 40, overIndex: 2, leftWindow: false });
+		const start = applyListDrag(state, {
+			type: "move",
+			x: 10,
+			y: 40,
+			overIndex: 2,
+			leftWindow: false,
+		});
 		expect(start.effect).toEqual({ type: "reorder", overIndex: 2 });
 		state = start.state;
 		const up = applyListDrag(state, { type: "up" });
@@ -689,30 +779,60 @@ describe("list drag gesture e2e", () => {
 
 	it("does not start an external drag on the first move", () => {
 		const state = applyListDrag(null, { type: "down", id: "note", index: 1, x: 20, y: 20 }).state;
-		const move = applyListDrag(state, { type: "move", x: 24, y: 22, overIndex: 1, leftWindow: false });
+		const move = applyListDrag(state, {
+			type: "move",
+			x: 24,
+			y: 22,
+			overIndex: 1,
+			leftWindow: false,
+		});
 		expect(move.effect).toEqual({ type: "none" });
 		expect(move.state?.live).toBe(false);
 	});
 
 	it("starts an external drag only after the pointer leaves the window", () => {
 		let state = applyListDrag(null, { type: "down", id: "note", index: 0, x: 10, y: 10 }).state;
-		state = applyListDrag(state, { type: "move", x: 10, y: 30, overIndex: 0, leftWindow: false }).state;
+		state = applyListDrag(state, {
+			type: "move",
+			x: 10,
+			y: 30,
+			overIndex: 0,
+			leftWindow: false,
+		}).state;
 		expect(state?.live).toBe(true);
-		const leave = applyListDrag(state, { type: "move", x: -4, y: 30, overIndex: 0, leftWindow: true });
+		const leave = applyListDrag(state, {
+			type: "move",
+			x: -4,
+			y: 30,
+			overIndex: 0,
+			leftWindow: true,
+		});
 		expect(leave.effect).toEqual({ type: "external", id: "note" });
 		expect(leave.state).toBeNull();
 	});
 
 	it("starts an external drag on pointerleave after the gesture is live", () => {
 		let state = applyListDrag(null, { type: "down", id: "link", index: 2, x: 8, y: 8 }).state;
-		state = applyListDrag(state, { type: "move", x: 8, y: 40, overIndex: 2, leftWindow: false }).state;
+		state = applyListDrag(state, {
+			type: "move",
+			x: 8,
+			y: 40,
+			overIndex: 2,
+			leftWindow: false,
+		}).state;
 		const leave = applyListDrag(state, { type: "leave" });
 		expect(leave.effect).toEqual({ type: "external", id: "link" });
 	});
 
 	it("starts an external drag when the pointer leaves before the 8px threshold", () => {
 		const state = applyListDrag(null, { type: "down", id: "note", index: 0, x: 2, y: 2 }).state;
-		const leave = applyListDrag(state, { type: "move", x: -1, y: 2, overIndex: 0, leftWindow: true });
+		const leave = applyListDrag(state, {
+			type: "move",
+			x: -1,
+			y: 2,
+			overIndex: 0,
+			leftWindow: true,
+		});
 		expect(leave.effect).toEqual({ type: "external", id: "note" });
 	});
 
@@ -752,7 +872,13 @@ describe("list drag gesture e2e", () => {
 
 	it("does not commit a drop on the same row", () => {
 		let state = applyListDrag(null, { type: "down", id: "b", index: 1, x: 10, y: 10 }).state;
-		state = applyListDrag(state, { type: "move", x: 10, y: 40, overIndex: 1, leftWindow: false }).state;
+		state = applyListDrag(state, {
+			type: "move",
+			x: 10,
+			y: 40,
+			overIndex: 1,
+			leftWindow: false,
+		}).state;
 		const up = applyListDrag(state, { type: "up" });
 		expect(up.effect).toEqual({ type: "none" });
 	});
@@ -764,11 +890,15 @@ describe("item drag payload", () => {
 	});
 
 	it("uses the URL for links", () => {
-		expect(itemExternalDragText(item({ text: "https://welii.com", kind: "link" }))).toBe("https://welii.com");
+		expect(itemExternalDragText(item({ text: "https://welii.com", kind: "link" }))).toBe(
+			"https://welii.com",
+		);
 	});
 
 	it("uses the file name for images", () => {
-		expect(itemExternalDragText(item({ text: "/tmp/shots/shot.png", kind: "image" }))).toBe("shot.png");
+		expect(itemExternalDragText(item({ text: "/tmp/shots/shot.png", kind: "image" }))).toBe(
+			"shot.png",
+		);
 	});
 
 	it("builds a file URL from an absolute path", () => {

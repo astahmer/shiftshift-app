@@ -61,7 +61,14 @@ export type MoveDirection = "up" | "down";
 
 export type SortMode = "manual" | "newest" | "oldest" | "az" | "za";
 
-export type CollectionField = "tag" | "kind" | "done" | "bookmarked" | "source_app" | "text" | "created_at";
+export type CollectionField =
+	| "tag"
+	| "kind"
+	| "done"
+	| "bookmarked"
+	| "source_app"
+	| "text"
+	| "created_at";
 export type CollectionOperator = "equals" | "contains" | "before" | "after";
 
 export interface CollectionPredicate {
@@ -98,7 +105,12 @@ export interface AutomationView {
 	enabled: boolean;
 }
 
-export type AutomationEvent = "item.created" | "item.updated" | "item.used" | "item.bookmarked" | "item.deleted";
+export type AutomationEvent =
+	| "item.created"
+	| "item.updated"
+	| "item.used"
+	| "item.bookmarked"
+	| "item.deleted";
 
 export interface AutomationHook {
 	id: string;
@@ -469,7 +481,11 @@ export class Store {
 	}
 
 	/** Shows the toast at a candidate position without saving it — see Settings -> Notifications. */
-	static previewToastPosition(position: ToastPosition, customX: number, customY: number): Promise<void> {
+	static previewToastPosition(
+		position: ToastPosition,
+		customX: number,
+		customY: number,
+	): Promise<void> {
 		return invoke("preview_toast_position", { position, customX, customY });
 	}
 
@@ -558,11 +574,20 @@ export class Store {
 		return invoke("list_custom_themes");
 	}
 
-	static addCustomTheme(name: string, mode: "light" | "dark", colors: ThemeColors): Promise<CustomTheme> {
+	static addCustomTheme(
+		name: string,
+		mode: "light" | "dark",
+		colors: ThemeColors,
+	): Promise<CustomTheme> {
 		return invoke("add_custom_theme", { name, mode, colors });
 	}
 
-	static updateCustomTheme(id: string, name: string, mode: "light" | "dark", colors: ThemeColors): Promise<void> {
+	static updateCustomTheme(
+		id: string,
+		name: string,
+		mode: "light" | "dark",
+		colors: ThemeColors,
+	): Promise<void> {
 		return invoke("update_custom_theme", { id, name, mode, colors });
 	}
 

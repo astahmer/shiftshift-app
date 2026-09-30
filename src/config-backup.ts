@@ -21,7 +21,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Builds the portable config shape while keeping Keychain-backed secrets out of it. */
-export function createConfigBackup(settings: Settings, templates: Template[], customThemes: CustomTheme[]): ConfigBackup {
+export function createConfigBackup(
+	settings: Settings,
+	templates: Template[],
+	customThemes: CustomTheme[],
+): ConfigBackup {
 	return {
 		version: CONFIG_BACKUP_VERSION,
 		settings: {
@@ -56,7 +60,12 @@ function parseCustomThemes(value: unknown): CustomTheme[] {
 		if (!isRecord(entry)) continue;
 		if (typeof entry.id !== "string" || !entry.id || seen.has(entry.id)) continue;
 		if (!isImportableTheme(entry)) continue;
-		const theme = entry as { id: string; name: string; mode: "light" | "dark"; colors: ThemeColors };
+		const theme = entry as {
+			id: string;
+			name: string;
+			mode: "light" | "dark";
+			colors: ThemeColors;
+		};
 		seen.add(theme.id);
 		themes.push({
 			id: theme.id,
@@ -79,9 +88,11 @@ export function parseConfigBackup(parsed: unknown): ParsedConfigBackup {
 		throw new Error(`unsupported config backup version: ${String(parsed.version)}`);
 	}
 
-	const nestedSettings = isRecord(parsed.settings) && "bindings" in parsed.settings ? parsed.settings : null;
+	const nestedSettings =
+		isRecord(parsed.settings) && "bindings" in parsed.settings ? parsed.settings : null;
 	const settingsRecord = nestedSettings ?? ("bindings" in parsed ? parsed : null);
-	if (!settingsRecord || !isRecord(settingsRecord.bindings)) throw new Error("not a shiftshift settings export");
+	if (!settingsRecord || !isRecord(settingsRecord.bindings))
+		throw new Error("not a shiftshift settings export");
 
 	const settings = { ...settingsRecord } as Partial<Settings>;
 	if ("s3" in settingsRecord) {

@@ -317,7 +317,8 @@
 	--window-radius: 0px;
 	--radius-sm: 0px;
 	--panel-border-width: 1px;
-	--shadow: inset -1px -1px 0 #000, inset 1px 1px 0 #fff, inset -2px -2px 0 #808080, inset 2px 2px 0 #dfdfdf;
+	--shadow:
+		inset -1px -1px 0 #000, inset 1px 1px 0 #fff, inset -2px -2px 0 #808080, inset 2px 2px 0 #dfdfdf;
 	--shadow-sm: inset -1px -1px 0 #000, inset 1px 1px 0 #fff;
 	--press-offset: 0px;
 	--font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
@@ -498,7 +499,9 @@
 	--window-radius: 0px;
 	--radius-sm: 0px;
 	--panel-border-width: 1px;
-	--shadow: inset -1px -1px 0 #000, inset 1px 1px 0 #808080, inset -2px -2px 0 #202020, inset 2px 2px 0 #5a5a5a;
+	--shadow:
+		inset -1px -1px 0 #000, inset 1px 1px 0 #808080, inset -2px -2px 0 #202020,
+		inset 2px 2px 0 #5a5a5a;
 	--shadow-sm: inset -1px -1px 0 #000, inset 1px 1px 0 #808080;
 	--press-offset: 0px;
 	--font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
@@ -850,13 +853,20 @@ button {
 	text-transform: var(--text-transform-ui);
 	letter-spacing: var(--letter-spacing-ui);
 	color: var(--button-fg, var(--fg));
-	background: color-mix(in srgb, var(--button-bg, var(--row-bg)) var(--row-alpha, 100%), transparent);
+	background: color-mix(
+		in srgb,
+		var(--button-bg, var(--row-bg)) var(--row-alpha, 100%),
+		transparent
+	);
 	border: var(--panel-border-width, 1px) solid var(--border);
 	border-radius: calc(var(--radius-sm, 10px) * 0.6);
 	box-shadow: var(--shadow-sm, none);
 	padding: 6px 10px;
 	cursor: pointer;
-	transition: transform 0.05s ease, box-shadow 0.05s ease, border-color 0.12s ease;
+	transition:
+		transform 0.05s ease,
+		box-shadow 0.05s ease,
+		border-color 0.12s ease;
 }
 
 button:hover {
@@ -870,7 +880,11 @@ button:active {
 
 [data-theme="win95"] button,
 [data-theme="win95-dark"] button {
-	box-shadow: inset 1px 1px 0 #fff, inset -1px -1px 0 #000, inset 2px 2px 0 #dfdfdf, inset -2px -2px 0 #808080;
+	box-shadow:
+		inset 1px 1px 0 #fff,
+		inset -1px -1px 0 #000,
+		inset 2px 2px 0 #dfdfdf,
+		inset -2px -2px 0 #808080;
 	border-color: #c0c0c0;
 }
 
@@ -883,7 +897,9 @@ button:active {
 [data-theme="win95"] button:focus-visible,
 [data-theme="win95-dark"] button:active,
 [data-theme="win95-dark"] button:focus-visible {
-	box-shadow: inset 1px 1px 0 #000, inset -1px -1px 0 #fff;
+	box-shadow:
+		inset 1px 1px 0 #000,
+		inset -1px -1px 0 #fff;
 	outline: 1px dotted #000;
 	outline-offset: -4px;
 }
@@ -913,7 +929,10 @@ button:active {
 [data-theme="win95"] textarea {
 	background: #fff;
 	color: #000;
-	box-shadow: inset 1px 1px 0 #808080, inset -1px -1px 0 #fff, inset 2px 2px 0 #000;
+	box-shadow:
+		inset 1px 1px 0 #808080,
+		inset -1px -1px 0 #fff,
+		inset 2px 2px 0 #000;
 	border-color: #808080;
 	border-radius: 0;
 }
@@ -924,7 +943,10 @@ button:active {
 [data-theme="win95-dark"] textarea {
 	background: #000;
 	color: #f0f0f0;
-	box-shadow: inset 1px 1px 0 #000, inset -1px -1px 0 #808080, inset 2px 2px 0 #202020;
+	box-shadow:
+		inset 1px 1px 0 #000,
+		inset -1px -1px 0 #808080,
+		inset 2px 2px 0 #202020;
 	border-color: #808080;
 	border-radius: 0;
 }
@@ -1291,7 +1313,11 @@ button:active {
 .settings-search {
 	flex: 1 1 100%;
 	min-width: 0;
-	background: color-mix(in srgb, var(--input-bg, var(--row-bg)) var(--row-alpha, 100%), transparent);
+	background: color-mix(
+		in srgb,
+		var(--input-bg, var(--row-bg)) var(--row-alpha, 100%),
+		transparent
+	);
 	border: 1px solid var(--input-border, var(--border));
 	border-radius: var(--radius-sm, 10px);
 	padding: 6px 10px;
@@ -1982,7 +2008,9 @@ button:active {
 	border-radius: 50%;
 	border: 1.5px solid var(--muted);
 	cursor: pointer;
-	transition: background 0.1s ease, border-color 0.1s ease;
+	transition:
+		background 0.1s ease,
+		border-color 0.1s ease;
 }
 
 .item-check[data-done="true"] {
@@ -3545,10 +3573,18 @@ button:active {
 	width: 16px;
 }
 
-.notch-drag[data-side="n"] { top: 0; }
-.notch-drag[data-side="s"] { bottom: 0; }
-.notch-drag[data-side="e"] { right: 0; }
-.notch-drag[data-side="w"] { left: 0; }
+.notch-drag[data-side="n"] {
+	top: 0;
+}
+.notch-drag[data-side="s"] {
+	bottom: 0;
+}
+.notch-drag[data-side="e"] {
+	right: 0;
+}
+.notch-drag[data-side="w"] {
+	left: 0;
+}
 
 .notch-drag[data-side="ne"],
 .notch-drag[data-side="nw"],
@@ -3559,10 +3595,22 @@ button:active {
 	height: 22px;
 }
 
-.notch-drag[data-side="ne"] { top: 0; right: 0; }
-.notch-drag[data-side="nw"] { top: 0; left: 0; }
-.notch-drag[data-side="se"] { bottom: 0; right: 0; }
-.notch-drag[data-side="sw"] { bottom: 0; left: 0; }
+.notch-drag[data-side="ne"] {
+	top: 0;
+	right: 0;
+}
+.notch-drag[data-side="nw"] {
+	top: 0;
+	left: 0;
+}
+.notch-drag[data-side="se"] {
+	bottom: 0;
+	right: 0;
+}
+.notch-drag[data-side="sw"] {
+	bottom: 0;
+	left: 0;
+}
 
 .notch-drag:hover {
 	background: color-mix(in srgb, var(--fg) 8%, transparent);
@@ -3594,10 +3642,18 @@ button:active {
 	cursor: ew-resize;
 }
 
-.notch-resize[data-side="n"] { top: 0; }
-.notch-resize[data-side="s"] { bottom: 0; }
-.notch-resize[data-side="e"] { right: 0; }
-.notch-resize[data-side="w"] { left: 0; }
+.notch-resize[data-side="n"] {
+	top: 0;
+}
+.notch-resize[data-side="s"] {
+	bottom: 0;
+}
+.notch-resize[data-side="e"] {
+	right: 0;
+}
+.notch-resize[data-side="w"] {
+	left: 0;
+}
 
 .notch-resize[data-side="ne"],
 .notch-resize[data-side="nw"],
@@ -3607,10 +3663,26 @@ button:active {
 	height: 12px;
 }
 
-.notch-resize[data-side="ne"] { top: 0; right: 0; cursor: nesw-resize; }
-.notch-resize[data-side="nw"] { top: 0; left: 0; cursor: nwse-resize; }
-.notch-resize[data-side="se"] { bottom: 0; right: 0; cursor: nwse-resize; }
-.notch-resize[data-side="sw"] { bottom: 0; left: 0; cursor: nesw-resize; }
+.notch-resize[data-side="ne"] {
+	top: 0;
+	right: 0;
+	cursor: nesw-resize;
+}
+.notch-resize[data-side="nw"] {
+	top: 0;
+	left: 0;
+	cursor: nwse-resize;
+}
+.notch-resize[data-side="se"] {
+	bottom: 0;
+	right: 0;
+	cursor: nwse-resize;
+}
+.notch-resize[data-side="sw"] {
+	bottom: 0;
+	left: 0;
+	cursor: nesw-resize;
+}
 
 #dock-app[data-edge="right"] .notch-resize:not([data-side="w"]),
 #dock-app[data-edge="left"] .notch-resize:not([data-side="e"]),

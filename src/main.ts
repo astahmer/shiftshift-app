@@ -200,7 +200,15 @@ app.appendChild(tagFilterBar);
 const list = document.createElement("div");
 list.className = "item-list";
 list.addEventListener("scroll", () => {
-	if (!notchShouldLoadMore(list.scrollTop, list.clientHeight, list.scrollHeight, listLoadedCount, filtered.length)) {
+	if (
+		!notchShouldLoadMore(
+			list.scrollTop,
+			list.clientHeight,
+			list.scrollHeight,
+			listLoadedCount,
+			filtered.length,
+		)
+	) {
 		return;
 	}
 	listLoadedCount = nextNotchLoadedCount(listLoadedCount, filtered.length);
@@ -275,7 +283,14 @@ let previewSnapshot: Settings | null = null;
 /** In-memory only, keyed by URL — refetched each launch. Favicons are displayed via a plain `<img src>`, which the webview loads cross-origin fine (CORS only blocks script-readable fetches, not image display), so only the title+favicon-URL lookup needs to go through Rust. */
 const linkPreviewCache = new Map<string, LinkPreview | "loading">();
 let listDragging = false;
-let pointerReorder: { id: string; from: number; over: number; x: number; y: number; live: boolean } | null = null;
+let pointerReorder: {
+	id: string;
+	from: number;
+	over: number;
+	x: number;
+	y: number;
+	live: boolean;
+} | null = null;
 
 /** The item currently shown in the detail view (Shift+Right), if any. */
 let detailItem: Item | null = null;
@@ -403,7 +418,9 @@ async function actOnPinnedSlot(slotIndex: number): Promise<void> {
 	const current = await loadSettings();
 	const pinnedId = current.pinned_items[slotIndex];
 	if (!pinnedId) {
-		showStatusToast(`Nothing pinned to ⌘${slotIndex + 1} yet — ⌘⇧${slotIndex + 1} to pin the selected item`);
+		showStatusToast(
+			`Nothing pinned to ⌘${slotIndex + 1} yet — ⌘⇧${slotIndex + 1} to pin the selected item`,
+		);
 		return;
 	}
 	const item = items.find((i) => i.id === pinnedId);
@@ -419,7 +436,12 @@ async function actOnPinnedSlot(slotIndex: number): Promise<void> {
 async function assignPinnedSlot(slotIndex: number): Promise<void> {
 	if (selected < 0 || !filtered[selected]) return;
 	const current = await loadSettings();
-	const next = { ...current, pinned_items: current.pinned_items.map((id, i) => (i === slotIndex ? filtered[selected]!.id : id)) };
+	const next = {
+		...current,
+		pinned_items: current.pinned_items.map((id, i) =>
+			i === slotIndex ? filtered[selected]!.id : id,
+		),
+	};
 	settings = next;
 	await Store.setSettings(next);
 	showStatusToast(`Pinned to ⌘${slotIndex + 1}`);
@@ -508,7 +530,10 @@ async function commitPreview(): Promise<void> {
 function computeFiltered(): Item[] {
 	const automationViews = enabledAutomationViews();
 	return applySort(
-		filterItems(itemsForTab(items, currentTab, selectedTagFilters, collections, automationViews), input.value),
+		filterItems(
+			itemsForTab(items, currentTab, selectedTagFilters, collections, automationViews),
+			input.value,
+		),
 		activeViewSort(currentTab, automationViews),
 	);
 }
@@ -516,7 +541,9 @@ function computeFiltered(): Item[] {
 function activeViewSort(tab: ListTab, automationViews: AutomationView[]): SortMode {
 	const fallback = settings?.sort_mode ?? "manual";
 	if (tab.startsWith("collection:")) {
-		const sort = collections.find((collection) => collection.id === tab.slice("collection:".length))?.sort;
+		const sort = collections.find(
+			(collection) => collection.id === tab.slice("collection:".length),
+		)?.sort;
 		return sort && SORT_OPTIONS.some((option) => option.mode === sort) ? sort : fallback;
 	}
 	if (tab.startsWith("automation:")) {
@@ -535,7 +562,12 @@ function activeViewSort(tab: ListTab, automationViews: AutomationView[]): SortMo
  */
 function renderListTabs(): void {
 	const automationViews = enabledAutomationViews();
-	const tabs = buildListTabs(items, settings?.separate_tag_tabs ?? true, collections, automationViews);
+	const tabs = buildListTabs(
+		items,
+		settings?.separate_tag_tabs ?? true,
+		collections,
+		automationViews,
+	);
 	if (!tabs.some((tab) => tab.id === currentTab)) currentTab = "recent";
 
 	tabsEl.innerHTML = "";
@@ -598,7 +630,12 @@ function setListTab(tab: ListTab): void {
 }
 
 function cycleListTab(delta: number): void {
-	const tabs = buildListTabs(items, settings?.separate_tag_tabs ?? true, collections, enabledAutomationViews());
+	const tabs = buildListTabs(
+		items,
+		settings?.separate_tag_tabs ?? true,
+		collections,
+		enabledAutomationViews(),
+	);
 	setListTab(nextListTab(tabs, currentTab, delta));
 }
 
@@ -607,8 +644,13 @@ function currentSuggestionCount(raw: string): number {
 	if (raw.startsWith("/")) {
 		const mode = parseSlashMode(raw);
 		if (mode.type === "theme" || mode.type === "light" || mode.type === "dark") {
-			const filterMode = mode.type === "light" ? "light" : mode.type === "dark" ? "dark" : undefined;
-			return matchThemeSuggestions(mode.type === "theme" ? mode.query : "", allThemeChoices(), filterMode).length;
+			const filterMode =
+				mode.type === "light" ? "light" : mode.type === "dark" ? "dark" : undefined;
+			return matchThemeSuggestions(
+				mode.type === "theme" ? mode.query : "",
+				allThemeChoices(),
+				filterMode,
+			).length;
 		}
 		if (mode.type === "sort") return matchSortSuggestions(mode.query).length;
 		if (mode.type === "history") return 0;
@@ -633,7 +675,12 @@ function updateHint(): void {
 	duplicateHint.hidden = !duplicate;
 }
 
-const CONTENT_TYPE_LABELS: Record<ItemKind, string> = { note: "Text", todo: "Todo", link: "Link", image: "Image" };
+const CONTENT_TYPE_LABELS: Record<ItemKind, string> = {
+	note: "Text",
+	todo: "Todo",
+	link: "Link",
+	image: "Image",
+};
 
 /** Shown in the footer the instant the matching modifier is held, so the
  * shortcuts it unlocks don't have to be memorized — see `updateHeldModifier`. */
@@ -691,7 +738,8 @@ function buildEmptyState(neverCaptured: boolean): HTMLElement {
 	const wrapper = document.createElement("div");
 	wrapper.className = "empty-state";
 	if (neverCaptured) {
-		wrapper.textContent = "Nothing captured yet — double-tap Shift, or type here and press ⌘Enter. Type /help for shortcuts.";
+		wrapper.textContent =
+			"Nothing captured yet — double-tap Shift, or type here and press ⌘Enter. Type /help for shortcuts.";
 		return wrapper;
 	}
 	const copy = emptyTabCopy(currentTab, input.value.trim().length > 0, selectedTagFilters.size);
@@ -700,7 +748,10 @@ function buildEmptyState(neverCaptured: boolean): HTMLElement {
 }
 
 function isPreviewMode(mode: ReturnType<typeof parseSlashMode> | null): boolean {
-	return mode !== null && (mode.type === "theme" || mode.type === "light" || mode.type === "dark" || mode.type === "sort");
+	return (
+		mode !== null &&
+		(mode.type === "theme" || mode.type === "light" || mode.type === "dark" || mode.type === "sort")
+	);
 }
 
 /** Keeps the keyboard-highlighted row in view — without this, arrowing past the visible edge of the scrollable list moves the selection but leaves it invisible above/below the fold. */
@@ -836,7 +887,9 @@ function renderSlashSuggestions(raw: string): void {
 
 	commandSuggestions = matchSlashSuggestions(raw, templatesCache);
 	if (selected >= commandSuggestions.length) selected = commandSuggestions.length - 1;
-	commandSuggestions.forEach((suggestion, index) => list.appendChild(buildSuggestionRow(suggestion, index)));
+	commandSuggestions.forEach((suggestion, index) =>
+		list.appendChild(buildSuggestionRow(suggestion, index)),
+	);
 }
 
 function renderAtSuggestions(partial: string): void {
@@ -851,7 +904,11 @@ function renderAtSuggestions(partial: string): void {
 async function renderHistoryRows(query: string): Promise<void> {
 	const entries = await Store.listHistory(200);
 	const q = query.trim().toLowerCase();
-	const matching = q ? entries.filter((e) => e.action.toLowerCase().includes(q) || (e.detail ?? "").toLowerCase().includes(q)) : entries;
+	const matching = q
+		? entries.filter(
+				(e) => e.action.toLowerCase().includes(q) || (e.detail ?? "").toLowerCase().includes(q),
+			)
+		: entries;
 	// A newer keystroke may have landed while this was in flight — don't clobber it.
 	if (input.value.trim() !== `/history ${query}`.trim()) return;
 	list.innerHTML = "";
@@ -920,7 +977,11 @@ function buildHelpRow(entry: MatchedHelpEntry): HTMLElement {
 }
 
 /** Renders `text` into `parent`, wrapping the [start, end) ranges (from a fuzzy match) in a highlight span. */
-function appendHighlighted(parent: HTMLElement, text: string, ranges: Array<[number, number]>): void {
+function appendHighlighted(
+	parent: HTMLElement,
+	text: string,
+	ranges: Array<[number, number]>,
+): void {
 	if (ranges.length === 0) {
 		parent.textContent = text;
 		return;
@@ -993,7 +1054,10 @@ function buildThemeSuggestionRow(theme: ThemeChoice, index: number): HTMLElement
 	return row;
 }
 
-function buildSortSuggestionRow(option: { mode: SortMode; label: string }, index: number): HTMLElement {
+function buildSortSuggestionRow(
+	option: { mode: SortMode; label: string },
+	index: number,
+): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "item-row suggestion-row";
 	row.classList.toggle("selected", index === selected);
@@ -1086,7 +1150,10 @@ function completeHashToken(tag: string): void {
 /** Enter (or a click) on a highlighted theme/sort suggestion: persist what live-preview already applied, then return to the normal list. */
 async function commitHighlightedSuggestion(): Promise<void> {
 	const mode = parseSlashMode(input.value);
-	if ((mode.type === "theme" || mode.type === "light" || mode.type === "dark") && themeSuggestions[selected]) {
+	if (
+		(mode.type === "theme" || mode.type === "light" || mode.type === "dark") &&
+		themeSuggestions[selected]
+	) {
 		await commitPreview();
 	} else if (mode.type === "sort" && sortSuggestions[selected]) {
 		await commitPreview();
@@ -1201,7 +1268,10 @@ function buildRow(item: Item, index: number): HTMLElement {
 	row.addEventListener("contextmenu", (e) => {
 		openItemContextMenu(
 			e,
-			itemContextEntries(item, { inSelection: multiSelected.has(item.id), selectionCount: multiSelected.size }),
+			itemContextEntries(item, {
+				inSelection: multiSelected.has(item.id),
+				selectionCount: multiSelected.size,
+			}),
 			(id) => {
 				void runItemChromeAction(item, id);
 			},
@@ -1214,9 +1284,18 @@ function buildRow(item: Item, index: number): HTMLElement {
 			(e) => {
 				if (e.button !== 0 || e.altKey) return;
 				if (pointerOnScrollbar(list, e.clientX)) return;
-				if (e.target instanceof Element && e.target.closest(".item-check, .item-edit-input, .item-actions, .link-label"))
+				if (
+					e.target instanceof Element &&
+					e.target.closest(".item-check, .item-edit-input, .item-actions, .link-label")
+				)
 					return;
-				pointerReorder = applyListDrag(null, { type: "down", id: item.id, index, x: e.clientX, y: e.clientY }).state;
+				pointerReorder = applyListDrag(null, {
+					type: "down",
+					id: item.id,
+					index,
+					x: e.clientX,
+					y: e.clientY,
+				}).state;
 				try {
 					row.setPointerCapture(e.pointerId);
 				} catch {
@@ -1252,7 +1331,9 @@ function markReorderOver(overIndex: number): void {
 	const dragging = rows.find((el) => el.dataset.id === pointerReorder?.id);
 	dragging?.classList.add("is-dragging");
 	const target = rows.find((el) => Number(el.dataset.dragIndex) === overIndex);
-	target?.classList.add(overIndex > (pointerReorder?.from ?? 0) ? "is-drop-after" : "is-drop-before");
+	target?.classList.add(
+		overIndex > (pointerReorder?.from ?? 0) ? "is-drop-after" : "is-drop-before",
+	);
 }
 
 window.addEventListener("pointermove", (e) => {
@@ -1265,7 +1346,13 @@ window.addEventListener("pointermove", (e) => {
 			const id = row?.dataset.id;
 			const index = row ? Number(row.dataset.dragIndex) : Number.NaN;
 			if (row && id && !Number.isNaN(index)) {
-				pointerReorder = applyListDrag(null, { type: "down", id, index, x: e.clientX, y: e.clientY }).state;
+				pointerReorder = applyListDrag(null, {
+					type: "down",
+					id,
+					index,
+					x: e.clientX,
+					y: e.clientY,
+				}).state;
 				try {
 					row.setPointerCapture(e.pointerId);
 				} catch {
@@ -1558,7 +1645,10 @@ async function shareItem(item: Item): Promise<void> {
 }
 
 /** Copy the multi-selection. Enter-to-close stays numbered; ⌘C stays as plain lines. */
-async function copyMultiSelection(close: boolean, style: "numbered" | "plain" = "numbered"): Promise<void> {
+async function copyMultiSelection(
+	close: boolean,
+	style: "numbered" | "plain" = "numbered",
+): Promise<void> {
 	const ordered = items.filter((item) => multiSelected.has(item.id));
 	const joined =
 		style === "plain"
@@ -1594,7 +1684,10 @@ async function bulkToggleBookmark(): Promise<void> {
 	const selected = items.filter((item) => multiSelected.has(item.id));
 	if (selected.length === 0) return;
 	for (const item of selected) await Store.toggleBookmarked(item.id);
-	pushUndo({ type: "bulk", entries: selected.map((item) => ({ type: "toggle_bookmarked", id: item.id })) });
+	pushUndo({
+		type: "bulk",
+		entries: selected.map((item) => ({ type: "toggle_bookmarked", id: item.id })),
+	});
 	await refresh();
 	showStatusToast(`Toggled bookmark on ${selected.length} item${selected.length === 1 ? "" : "s"}`);
 }
@@ -1636,7 +1729,9 @@ async function applyBulkTag(selected: Item[], raw: string): Promise<void> {
 	}
 	pushUndo({ type: "bulk", entries });
 	await refresh();
-	showStatusToast(`Tagged ${selected.length} item${selected.length === 1 ? "" : "s"} with #${clean}`);
+	showStatusToast(
+		`Tagged ${selected.length} item${selected.length === 1 ? "" : "s"} with #${clean}`,
+	);
 }
 
 function formatAbsoluteTime(iso: string): string {
@@ -1682,7 +1777,10 @@ function buildDetailTop(item: Item, editing: boolean): HTMLElement {
 		const current = await loadSettings();
 		const already = current.pinned_items.findIndex((id) => id === item.id);
 		if (already >= 0) {
-			const next = { ...current, pinned_items: current.pinned_items.map((id, i) => (i === already ? "" : id)) };
+			const next = {
+				...current,
+				pinned_items: current.pinned_items.map((id, i) => (i === already ? "" : id)),
+			};
 			settings = next;
 			await Store.setSettings(next);
 			showStatusToast("Unpinned");
@@ -1691,7 +1789,10 @@ function buildDetailTop(item: Item, editing: boolean): HTMLElement {
 		}
 		const empty = current.pinned_items.findIndex((id) => !id);
 		const slot = empty >= 0 ? empty : 0;
-		const next = { ...current, pinned_items: current.pinned_items.map((id, i) => (i === slot ? item.id : id)) };
+		const next = {
+			...current,
+			pinned_items: current.pinned_items.map((id, i) => (i === slot ? item.id : id)),
+		};
 		settings = next;
 		await Store.setSettings(next);
 		showStatusToast(`Pinned to ⌘${slot + 1}`);
@@ -2010,7 +2111,12 @@ async function refresh(options?: { skipUnchanged: boolean } | void): Promise<voi
 				Store.listTemplates(),
 				Store.listCollections(),
 			]);
-			if (!renderRequested && JSON.stringify([items, templatesCache, collections]) === JSON.stringify([nextItems, nextTemplates, nextCollections])) continue;
+			if (
+				!renderRequested &&
+				JSON.stringify([items, templatesCache, collections]) ===
+					JSON.stringify([nextItems, nextTemplates, nextCollections])
+			)
+				continue;
 			items = nextItems;
 			templatesCache = nextTemplates;
 			collections = nextCollections;
@@ -2162,7 +2268,10 @@ document.addEventListener("keydown", async (e) => {
 			e.preventDefault();
 			const currentIndex = filtered.findIndex((i) => i.id === detailItem!.id);
 			if (currentIndex >= 0) {
-				const nextIndex = e.key === "ArrowDown" ? Math.min(currentIndex + 1, filtered.length - 1) : Math.max(currentIndex - 1, 0);
+				const nextIndex =
+					e.key === "ArrowDown"
+						? Math.min(currentIndex + 1, filtered.length - 1)
+						: Math.max(currentIndex - 1, 0);
 				if (filtered[nextIndex] && nextIndex !== currentIndex) {
 					selected = nextIndex;
 					showDetail(filtered[nextIndex]!);
@@ -2196,7 +2305,10 @@ document.addEventListener("keydown", async (e) => {
 		}
 		if (
 			slashMode &&
-			(slashMode.type === "theme" || slashMode.type === "light" || slashMode.type === "dark" || slashMode.type === "sort")
+			(slashMode.type === "theme" ||
+				slashMode.type === "light" ||
+				slashMode.type === "dark" ||
+				slashMode.type === "sort")
 		) {
 			e.preventDefault();
 			await commitHighlightedSuggestion();
@@ -2221,7 +2333,9 @@ document.addEventListener("keydown", async (e) => {
 			const rows = computeFiltered();
 			const highlighted = selected >= 0 ? rows[selected] : undefined;
 			const pick =
-				highlighted && highlighted.kind !== "image" ? highlighted : rows.find((row) => row.kind !== "image");
+				highlighted && highlighted.kind !== "image"
+					? highlighted
+					: rows.find((row) => row.kind !== "image");
 			if (pick) {
 				input.value = pick.text;
 				selected = 0;
@@ -2237,7 +2351,13 @@ document.addEventListener("keydown", async (e) => {
 	// Only in the unfiltered (full, rank-ordered) view — a filtered view's
 	// visual neighbors aren't necessarily rank-adjacent, so "move up" could
 	// jump somewhere that doesn't look like "up" at all.
-	if (e.altKey && input.value === "" && (e.key === "ArrowUp" || e.key === "ArrowDown") && selected >= 0 && filtered[selected]) {
+	if (
+		e.altKey &&
+		input.value === "" &&
+		(e.key === "ArrowUp" || e.key === "ArrowDown") &&
+		selected >= 0 &&
+		filtered[selected]
+	) {
 		e.preventDefault();
 		const direction: MoveDirection = e.key === "ArrowUp" ? "up" : "down";
 		const movedId = filtered[selected]!.id;
@@ -2270,8 +2390,7 @@ document.addEventListener("keydown", async (e) => {
 		if (inSuggest) {
 			const count = currentSuggestionCount(raw);
 			if (count > 0) {
-				selected =
-					selected < 0 ? (delta > 0 ? 0 : count - 1) : (selected + delta + count) % count;
+				selected = selected < 0 ? (delta > 0 ? 0 : count - 1) : (selected + delta + count) % count;
 			}
 		} else {
 			const next = stepLoadedSelection(selected, listLoadedCount, computeFiltered().length, delta);
@@ -2306,12 +2425,23 @@ document.addEventListener("keydown", async (e) => {
 	// used to delete it outright with no confirmation. With a multi-
 	// selection active, these act on the whole selection instead of just
 	// the highlighted row.
-	if (modKey && (e.key === "Backspace" || e.key === "Delete") && input.value === "" && multiSelected.size > 0) {
+	if (
+		modKey &&
+		(e.key === "Backspace" || e.key === "Delete") &&
+		input.value === "" &&
+		multiSelected.size > 0
+	) {
 		e.preventDefault();
 		await bulkDelete();
 		return;
 	}
-	if (modKey && (e.key === "Backspace" || e.key === "Delete") && input.value === "" && selected >= 0 && filtered[selected]) {
+	if (
+		modKey &&
+		(e.key === "Backspace" || e.key === "Delete") &&
+		input.value === "" &&
+		selected >= 0 &&
+		filtered[selected]
+	) {
 		e.preventDefault();
 		const item = filtered[selected]!;
 		pushUndo({ type: "delete", item });
@@ -2332,12 +2462,23 @@ document.addEventListener("keydown", async (e) => {
 		await refresh();
 		return;
 	}
-	if (modKey && e.key.toLowerCase() === "e" && selected >= 0 && filtered[selected] && filtered[selected]!.kind !== "image") {
+	if (
+		modKey &&
+		e.key.toLowerCase() === "e" &&
+		selected >= 0 &&
+		filtered[selected] &&
+		filtered[selected]!.kind !== "image"
+	) {
 		e.preventDefault();
 		startEditing(filtered[selected]!.id);
 		return;
 	}
-	if (modKey && e.key.toLowerCase() === "o" && selected >= 0 && filtered[selected]?.kind === "link") {
+	if (
+		modKey &&
+		e.key.toLowerCase() === "o" &&
+		selected >= 0 &&
+		filtered[selected]?.kind === "link"
+	) {
 		e.preventDefault();
 		await runItemChromeAction(filtered[selected]!, "open");
 		return;
@@ -2352,7 +2493,13 @@ document.addEventListener("keydown", async (e) => {
 		await bulkToggleTodo();
 		return;
 	}
-	if (modKey && e.key.toLowerCase() === "t" && selected >= 0 && filtered[selected] && filtered[selected]!.kind !== "image") {
+	if (
+		modKey &&
+		e.key.toLowerCase() === "t" &&
+		selected >= 0 &&
+		filtered[selected] &&
+		filtered[selected]!.kind !== "image"
+	) {
 		e.preventDefault();
 		const current = filtered[selected]!;
 		const to = current.kind === "todo" ? "note" : "todo";
@@ -2371,7 +2518,10 @@ document.addEventListener("keydown", async (e) => {
 		e.preventDefault();
 		const item = filtered[selected]!;
 		openCommandPalette(
-			itemContextEntries(item, { inSelection: multiSelected.has(item.id), selectionCount: multiSelected.size }),
+			itemContextEntries(item, {
+				inSelection: multiSelected.has(item.id),
+				selectionCount: multiSelected.size,
+			}),
 			(id) => {
 				void runItemChromeAction(item, id);
 			},
@@ -2408,12 +2558,24 @@ document.addEventListener("keydown", async (e) => {
 		renderList();
 		return;
 	}
-	if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && input.value === "" && selected < 0 && !e.shiftKey) {
+	if (
+		(e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+		input.value === "" &&
+		selected < 0 &&
+		!e.shiftKey
+	) {
 		e.preventDefault();
 		cycleListTab(e.key === "ArrowRight" ? 1 : -1);
 		return;
 	}
-	if (e.shiftKey && e.key === "ArrowRight" && input.value === "" && selected >= 0 && filtered[selected] && detailView.hidden) {
+	if (
+		e.shiftKey &&
+		e.key === "ArrowRight" &&
+		input.value === "" &&
+		selected >= 0 &&
+		filtered[selected] &&
+		detailView.hidden
+	) {
 		e.preventDefault();
 		showDetail(filtered[selected]!);
 		return;
@@ -2503,7 +2665,9 @@ input.addEventListener("input", () => {
 // answer to "how do I capture an image" that doesn't require knowing about
 // the dedicated shortcut or Settings → Images.
 input.addEventListener("paste", (e) => {
-	const hasImage = Array.from(e.clipboardData?.items ?? []).some((item) => item.type.startsWith("image/"));
+	const hasImage = Array.from(e.clipboardData?.items ?? []).some((item) =>
+		item.type.startsWith("image/"),
+	);
 	if (!hasImage) return;
 	e.preventDefault();
 	void (async () => {
@@ -2522,16 +2686,18 @@ input.addEventListener("paste", (e) => {
 // are also reread when this panel becomes visible again, so iCloud downloads
 // don't require a full app restart to appear.
 listen("refresh", () => void refresh());
-void Store.getSyncStatus().then((status) => {
-    if (status.active_backend === "local") return;
-    const stop = startSyncRefresh({
-        refresh: () => refresh({ skipUnchanged: true }),
-        isVisible: () => getCurrentWindow().isVisible(),
-        intervalMs: status.active_backend === "s3" ? 15000 : 3000,
-        onError: (error) => console.error("Sync refresh failed", error),
-    });
-    window.addEventListener("pagehide", stop, { once: true });
-}).catch((error) => console.error("Sync status unavailable", error));
+void Store.getSyncStatus()
+	.then((status) => {
+		if (status.active_backend === "local") return;
+		const stop = startSyncRefresh({
+			refresh: () => refresh({ skipUnchanged: true }),
+			isVisible: () => getCurrentWindow().isVisible(),
+			intervalMs: status.active_backend === "s3" ? 15000 : 3000,
+			onError: (error) => console.error("Sync refresh failed", error),
+		});
+		window.addEventListener("pagehide", stop, { once: true });
+	})
+	.catch((error) => console.error("Sync status unavailable", error));
 
 listen("open-settings", () => {
 	void openSettings();
@@ -2797,8 +2963,24 @@ function buildPanelSizeRows(current: Settings): HTMLElement[] {
 	};
 	resetRow.appendChild(reset);
 	return [
-		buildSizeSliderRow("Window width", "size width panel window resize", width, 640, 360, 1200, (w) => apply({ width: w })),
-		buildSizeSliderRow("Window height", "size height panel window resize", height, 420, 280, 900, (h) => apply({ height: h })),
+		buildSizeSliderRow(
+			"Window width",
+			"size width panel window resize",
+			width,
+			640,
+			360,
+			1200,
+			(w) => apply({ width: w }),
+		),
+		buildSizeSliderRow(
+			"Window height",
+			"size height panel window resize",
+			height,
+			420,
+			280,
+			900,
+			(h) => apply({ height: h }),
+		),
 		resetRow,
 	];
 }
@@ -2861,7 +3043,8 @@ function buildOpacityRow(current: Settings): HTMLElement {
 	row.appendChild(readout);
 
 	const resetBtn = document.createElement("button");
-	resetBtn.textContent = current.panel_opacity === 0 ? "Override theme opacity" : "Use theme default";
+	resetBtn.textContent =
+		current.panel_opacity === 0 ? "Override theme opacity" : "Use theme default";
 	resetBtn.onclick = async () => {
 		const next = { ...current, panel_opacity: current.panel_opacity === 0 ? 50 : 0 };
 		settings = next;
@@ -2875,7 +3058,12 @@ function buildOpacityRow(current: Settings): HTMLElement {
 }
 
 /** A label + checkbox settings row; `patch` returns the settings update to persist. */
-function buildCheckboxRow(label: string, checked: boolean, disabled: boolean, patch: (checked: boolean) => Partial<Settings>): HTMLElement {
+function buildCheckboxRow(
+	label: string,
+	checked: boolean,
+	disabled: boolean,
+	patch: (checked: boolean) => Partial<Settings>,
+): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "settings-row";
 	const labelEl = document.createElement("label");
@@ -2905,8 +3093,8 @@ const NOTIFICATION_STYLE_LABELS: Record<NotificationStyle, string> = {
 
 const NOTIFY_CONTENT_LABELS: Record<NotifyContent, string> = {
 	icon_only: "Icon only",
-	icon_title: "Icon + \"Note saved\"",
-	icon_title_excerpt: "Icon + \"Note saved\" + excerpt",
+	icon_title: 'Icon + "Note saved"',
+	icon_title_excerpt: 'Icon + "Note saved" + excerpt',
 	icon_excerpt: "Icon + excerpt",
 };
 
@@ -2962,12 +3150,18 @@ function buildNotifyContentRow(current: Settings): HTMLElement {
 		const latest = await loadSettings();
 		const notify_content = select.value as NotifyContent;
 		const notification_style =
-			notify_content === "icon_only" && latest.notification_style === "native" ? "custom" : latest.notification_style;
+			notify_content === "icon_only" && latest.notification_style === "native"
+				? "custom"
+				: latest.notification_style;
 		const next = { ...latest, notify_content, notification_style };
 		settings = next;
 		await Store.setSettings(next);
 		if (next.notification_style === "custom") {
-			void Store.previewToastPosition(next.toast_position, next.toast_custom_x, next.toast_custom_y);
+			void Store.previewToastPosition(
+				next.toast_position,
+				next.toast_custom_x,
+				next.toast_custom_y,
+			);
 		}
 		if (notification_style !== latest.notification_style) await openSettings();
 	};
@@ -3027,7 +3221,11 @@ function buildToastAppearanceRows(current: Settings): HTMLElement[] {
 		if (!settings) return;
 		settings = { ...settings, toast_font_scale: Number(scaleSlider.value) };
 		await Store.setSettings(settings);
-		void Store.previewToastPosition(settings.toast_position, settings.toast_custom_x, settings.toast_custom_y);
+		void Store.previewToastPosition(
+			settings.toast_position,
+			settings.toast_custom_x,
+			settings.toast_custom_y,
+		);
 	};
 	scaleRow.appendChild(scaleSlider);
 	scaleRow.appendChild(scaleReadout);
@@ -3074,7 +3272,8 @@ function buildToastPositionRow(current: Settings): HTMLElement {
 			const next = { ...latest, toast_position: position };
 			settings = next;
 			await Store.setSettings(next);
-			for (const other of grid.querySelectorAll(".toast-position-cell-active")) other.classList.remove("toast-position-cell-active");
+			for (const other of grid.querySelectorAll(".toast-position-cell-active"))
+				other.classList.remove("toast-position-cell-active");
 			cell.classList.add("toast-position-cell-active");
 			void Store.previewToastPosition(position, next.toast_custom_x, next.toast_custom_y);
 		};
@@ -3083,7 +3282,10 @@ function buildToastPositionRow(current: Settings): HTMLElement {
 	row.appendChild(grid);
 
 	const dragBtn = document.createElement("button");
-	dragBtn.textContent = current.toast_position === "custom" ? "Free — drag preview to re-place" : "Free — drag preview anywhere";
+	dragBtn.textContent =
+		current.toast_position === "custom"
+			? "Free — drag preview to re-place"
+			: "Free — drag preview anywhere";
 	dragBtn.disabled = disabled;
 	dragBtn.onclick = () => void Store.startToastArrange();
 	row.appendChild(dragBtn);
@@ -3142,14 +3344,16 @@ function buildDockRows(current: Settings): HTMLElement[] {
 			const next = { ...latest, dock_position: anchor.position };
 			settings = next;
 			await Store.setSettings(next);
-			for (const other of grid.querySelectorAll(".toast-position-cell-active")) other.classList.remove("toast-position-cell-active");
+			for (const other of grid.querySelectorAll(".toast-position-cell-active"))
+				other.classList.remove("toast-position-cell-active");
 			cell.classList.add("toast-position-cell-active");
 		};
 		grid.appendChild(cell);
 	}
 	positionRow.appendChild(grid);
 	const dragBtn = document.createElement("button");
-	dragBtn.textContent = current.dock_position === "custom" ? "Custom (drag to re-place)" : "Drag to place…";
+	dragBtn.textContent =
+		current.dock_position === "custom" ? "Custom (drag to re-place)" : "Drag to place…";
 	dragBtn.disabled = disabled;
 	dragBtn.onclick = () => void Store.startDockArrange();
 	positionRow.appendChild(dragBtn);
@@ -3178,15 +3382,23 @@ function buildDockRows(current: Settings): HTMLElement[] {
 		const width = latest.dock_expanded_width > 0 ? latest.dock_expanded_width : 320;
 		await Store.setSettings({ ...latest, dock_item_count: count, dock_row_height: row });
 		await Store.saveDockFrame(width, height);
-		settings = { ...latest, dock_item_count: count, dock_row_height: row, dock_expanded_width: width, dock_expanded_height: height };
+		settings = {
+			...latest,
+			dock_item_count: count,
+			dock_row_height: row,
+			dock_expanded_width: width,
+			dock_expanded_height: height,
+		};
 	};
 	countRow.appendChild(countSlider);
 	countRow.appendChild(countReadout);
 
 	const applyExpanded = async (patch: { width?: number; height?: number }): Promise<void> => {
 		const latest = await loadSettings();
-		const width = patch.width ?? (latest.dock_expanded_width > 0 ? latest.dock_expanded_width : 320);
-		const height = patch.height ?? (latest.dock_expanded_height > 0 ? latest.dock_expanded_height : 508);
+		const width =
+			patch.width ?? (latest.dock_expanded_width > 0 ? latest.dock_expanded_width : 320);
+		const height =
+			patch.height ?? (latest.dock_expanded_height > 0 ? latest.dock_expanded_height : 508);
 		await Store.saveDockFrame(width, height);
 		settings = { ...latest, dock_expanded_width: width, dock_expanded_height: height };
 	};
@@ -3236,15 +3448,29 @@ function buildDockRows(current: Settings): HTMLElement[] {
 	autoRow.appendChild(autoBtn);
 
 	return [
-		buildCheckboxRow("Show recent-items dock", current.dock_enabled, false, (checked) => ({ dock_enabled: checked })),
+		buildCheckboxRow("Show recent-items dock", current.dock_enabled, false, (checked) => ({
+			dock_enabled: checked,
+		})),
 		positionRow,
 		countRow,
 		rowRow,
-		buildSizeSliderRow("Expanded width", "dock notch expanded size width", expandedWidth, 320, 160, 560, (w) =>
-			applyExpanded({ width: w }),
+		buildSizeSliderRow(
+			"Expanded width",
+			"dock notch expanded size width",
+			expandedWidth,
+			320,
+			160,
+			560,
+			(w) => applyExpanded({ width: w }),
 		),
-		buildSizeSliderRow("Expanded height", "dock notch expanded size height", expandedHeight, 508, 140, 720, (h) =>
-			applyExpanded({ height: h }),
+		buildSizeSliderRow(
+			"Expanded height",
+			"dock notch expanded size height",
+			expandedHeight,
+			508,
+			140,
+			720,
+			(h) => applyExpanded({ height: h }),
 		),
 		autoRow,
 	];
@@ -3407,7 +3633,9 @@ function buildHighlightSubmitRow(current: Settings): HTMLElement {
 
 function buildBehaviorRows(current: Settings): HTMLElement[] {
 	return [
-		buildCheckboxRow("Hide when the panel loses focus", current.hide_on_blur, false, (checked) => ({ hide_on_blur: checked })),
+		buildCheckboxRow("Hide when the panel loses focus", current.hide_on_blur, false, (checked) => ({
+			hide_on_blur: checked,
+		})),
 		buildCheckboxRow(
 			"Autocorrect / spellcheck on the capture input",
 			current.input_spellcheck,
@@ -3420,12 +3648,9 @@ function buildBehaviorRows(current: Settings): HTMLElement[] {
 			false,
 			(checked) => ({ clipboard_watch: checked }),
 		),
-		buildCheckboxRow(
-			"Separate tab per tag",
-			current.separate_tag_tabs,
-			false,
-			(checked) => ({ separate_tag_tabs: checked }),
-		),
+		buildCheckboxRow("Separate tab per tag", current.separate_tag_tabs, false, (checked) => ({
+			separate_tag_tabs: checked,
+		})),
 	];
 }
 
@@ -3449,7 +3674,10 @@ function buildPinnedItemsSection(current: Settings): HTMLElement {
 		const clearBtn = document.createElement("button");
 		clearBtn.textContent = "Clear";
 		clearBtn.onclick = async () => {
-			const next = { ...current, pinned_items: current.pinned_items.map((v, i) => (i === slot ? "" : v)) };
+			const next = {
+				...current,
+				pinned_items: current.pinned_items.map((v, i) => (i === slot ? "" : v)),
+			};
 			settings = next;
 			await Store.setSettings(next);
 			await openSettings();
@@ -3505,14 +3733,17 @@ const COLLECTION_FIELDS: Array<{ field: CollectionPredicate["field"]; label: str
 	{ field: "created_at", label: "Created" },
 ];
 
-function collectionOperators(field: CollectionPredicate["field"]): CollectionPredicate["operator"][] {
+function collectionOperators(
+	field: CollectionPredicate["field"],
+): CollectionPredicate["operator"][] {
 	if (field === "created_at") return ["before", "after"];
 	if (field === "source_app" || field === "text") return ["equals", "contains"];
 	return ["equals"];
 }
 
 function collectionPredicateLabel(predicate: CollectionPredicate): string {
-	const field = COLLECTION_FIELDS.find((option) => option.field === predicate.field)?.label ?? predicate.field;
+	const field =
+		COLLECTION_FIELDS.find((option) => option.field === predicate.field)?.label ?? predicate.field;
 	const operator = predicate.operator === "equals" ? "is" : predicate.operator;
 	return `${field} ${operator} ${predicate.value || "…"}`;
 }
@@ -3520,8 +3751,10 @@ function collectionPredicateLabel(predicate: CollectionPredicate): string {
 function collectionQuerySummary(query: CollectionQuery): string {
 	const groups: string[] = [];
 	if (query.all.length > 0) groups.push(query.all.map(collectionPredicateLabel).join(" · "));
-	if (query.any.length > 0) groups.push(`any: ${query.any.map(collectionPredicateLabel).join(" · ")}`);
-	if (query.none.length > 0) groups.push(`not: ${query.none.map(collectionPredicateLabel).join(" · ")}`);
+	if (query.any.length > 0)
+		groups.push(`any: ${query.any.map(collectionPredicateLabel).join(" · ")}`);
+	if (query.none.length > 0)
+		groups.push(`not: ${query.none.map(collectionPredicateLabel).join(" · ")}`);
 	return groups.join("; ") || "Everything";
 }
 
@@ -3530,7 +3763,10 @@ function newCollectionId(): string {
 	return `collection-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function buildCollectionEditor(editing: Collection | null, onDone: () => Promise<void>): HTMLElement {
+function buildCollectionEditor(
+	editing: Collection | null,
+	onDone: () => Promise<void>,
+): HTMLElement {
 	const wrapper = document.createElement("div");
 	wrapper.className = "collection-editor";
 	const draft: Collection = editing
@@ -3583,7 +3819,8 @@ function buildCollectionEditor(editing: Collection | null, onDone: () => Promise
 
 	const hint = document.createElement("div");
 	hint.className = "collection-editor-hint";
-	hint.textContent = "All facets below must match. Automation/plugin views can also use any and not groups in JSON.";
+	hint.textContent =
+		"All facets below must match. Automation/plugin views can also use any and not groups in JSON.";
 	wrapper.appendChild(hint);
 
 	const clauses = document.createElement("div");
@@ -3624,7 +3861,8 @@ function buildCollectionEditor(editing: Collection | null, onDone: () => Promise
 				entry.selected = predicate.operator === operator;
 				operatorSelect.appendChild(entry);
 			}
-			operatorSelect.onchange = () => (predicate.operator = operatorSelect.value as CollectionPredicate["operator"]);
+			operatorSelect.onchange = () =>
+				(predicate.operator = operatorSelect.value as CollectionPredicate["operator"]);
 			row.appendChild(operatorSelect);
 
 			const valueInput = document.createElement("input");
@@ -3694,7 +3932,10 @@ function buildCollectionEditor(editing: Collection | null, onDone: () => Promise
 	return wrapper;
 }
 
-function renderCollectionsSettingsSection(container: HTMLElement, editingId: string | null = null): void {
+function renderCollectionsSettingsSection(
+	container: HTMLElement,
+	editingId: string | null = null,
+): void {
 	container.innerHTML = "";
 	for (const collection of collections) {
 		const row = document.createElement("div");
@@ -3827,7 +4068,9 @@ function buildAutomationHooksRow(current: Settings): HTMLElement {
 							: {
 									...candidate,
 									views: (candidate.views ?? []).map((candidateView) =>
-										candidateView.id === view.id ? { ...candidateView, enabled: checkbox.checked } : candidateView,
+										candidateView.id === view.id
+											? { ...candidateView, enabled: checkbox.checked }
+											: candidateView,
 									),
 								},
 					),
@@ -3892,9 +4135,15 @@ function buildAutomationHooksRow(current: Settings): HTMLElement {
 /** Both default off: this app is meant to be summoned purely via the double-shift gesture / fallback shortcuts, not alt-tabbed to or clicked on. */
 function buildVisibilityRows(current: Settings): HTMLElement[] {
 	return [
-		buildCheckboxRow("Show in Dock", current.show_in_dock, false, (checked) => ({ show_in_dock: checked })),
-		buildCheckboxRow("Show in menu bar", current.show_tray_icon, false, (checked) => ({ show_tray_icon: checked })),
-		buildCheckboxRow("Launch at login", current.launch_at_login, false, (checked) => ({ launch_at_login: checked })),
+		buildCheckboxRow("Show in Dock", current.show_in_dock, false, (checked) => ({
+			show_in_dock: checked,
+		})),
+		buildCheckboxRow("Show in menu bar", current.show_tray_icon, false, (checked) => ({
+			show_tray_icon: checked,
+		})),
+		buildCheckboxRow("Launch at login", current.launch_at_login, false, (checked) => ({
+			launch_at_login: checked,
+		})),
 	];
 }
 
@@ -3904,7 +4153,13 @@ function eventToAccelerator(e: KeyboardEvent): string | null {
 	if (e.metaKey || e.ctrlKey) parts.push("CmdOrCtrl");
 	if (e.shiftKey) parts.push("Shift");
 	if (e.altKey) parts.push("Alt");
-	const keyNames: Record<string, string> = { " ": "Space", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right" };
+	const keyNames: Record<string, string> = {
+		" ": "Space",
+		ArrowUp: "Up",
+		ArrowDown: "Down",
+		ArrowLeft: "Left",
+		ArrowRight: "Right",
+	};
 	parts.push(keyNames[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key));
 	if (parts.length < 2) return null; // require at least one modifier
 	return parts.join("+");
@@ -3912,7 +4167,11 @@ function eventToAccelerator(e: KeyboardEvent): string | null {
 
 function formatAccelerator(accel: string): string {
 	if (!accel) return "Not set";
-	return accel.replaceAll("CmdOrCtrl", "⌘").replaceAll("Shift", "⇧").replaceAll("Alt", "⌥").replaceAll("+", " ");
+	return accel
+		.replaceAll("CmdOrCtrl", "⌘")
+		.replaceAll("Shift", "⇧")
+		.replaceAll("Alt", "⌥")
+		.replaceAll("+", " ");
 }
 
 type FallbackShortcutKey = "fallback_toggle" | "fallback_capture" | "fallback_image";
@@ -4066,7 +4325,8 @@ function buildConfigBackupRow(): HTMLElement {
 
 	const exportBtn = document.createElement("button");
 	exportBtn.textContent = "Export config to clipboard";
-	exportBtn.title = "Exports settings, templates, and custom themes. The S3 secret stays in the OS Keychain.";
+	exportBtn.title =
+		"Exports settings, templates, and custom themes. The S3 secret stays in the OS Keychain.";
 	exportBtn.onclick = async () => {
 		const [latest, templates, customThemes] = await Promise.all([
 			Store.getSettings(),
@@ -4074,7 +4334,9 @@ function buildConfigBackupRow(): HTMLElement {
 			Store.listCustomThemes(),
 		]);
 		settings = latest;
-		await navigator.clipboard.writeText(JSON.stringify(createConfigBackup(latest, templates, customThemes), null, 2));
+		await navigator.clipboard.writeText(
+			JSON.stringify(createConfigBackup(latest, templates, customThemes), null, 2),
+		);
 		exportBtn.textContent = "Copied!";
 		setTimeout(() => (exportBtn.textContent = "Export config to clipboard"), 1500);
 	};
@@ -4082,7 +4344,8 @@ function buildConfigBackupRow(): HTMLElement {
 
 	const importBtn = document.createElement("button");
 	importBtn.textContent = "Import config from clipboard";
-	importBtn.title = "Restores settings, templates, and custom themes. S3 credentials must be entered again on this Mac.";
+	importBtn.title =
+		"Restores settings, templates, and custom themes. S3 credentials must be entered again on this Mac.";
 	importBtn.onclick = async () => {
 		try {
 			const raw = await navigator.clipboard.readText();
@@ -4115,7 +4378,10 @@ function buildConfigBackupRow(): HTMLElement {
 	resetAll.textContent = "Reset all settings";
 	resetAll.title = "Factory defaults. Custom themes, templates, and the S3 key stay.";
 	resetAll.onclick = async () => {
-		if (!window.confirm("Reset every setting to factory defaults? Custom themes and templates stay.")) return;
+		if (
+			!window.confirm("Reset every setting to factory defaults? Custom themes and templates stay.")
+		)
+			return;
 		settings = await Store.resetSettings();
 		clearCustomPalette(document.documentElement);
 		applyTheme(settings.theme);
@@ -4147,7 +4413,11 @@ async function buildUpdatesRow(): Promise<HTMLElement> {
 	feedback.setAttribute("role", "status");
 	feedback.setAttribute("aria-live", "polite");
 
-	function showFeedback(message: string, kind: "info" | "success" | "error", detail = message): void {
+	function showFeedback(
+		message: string,
+		kind: "info" | "success" | "error",
+		detail = message,
+	): void {
 		feedback.className = `update-feedback update-feedback-${kind}`;
 		feedback.textContent = message;
 		feedback.title = detail === message ? "" : detail;
@@ -4165,7 +4435,10 @@ async function buildUpdatesRow(): Promise<HTMLElement> {
 		checkBtn.onclick = () => void installUpdate(update);
 	}
 
-	async function installUpdate(update: { version: string; downloadAndInstall: () => Promise<void> }): Promise<void> {
+	async function installUpdate(update: {
+		version: string;
+		downloadAndInstall: () => Promise<void>;
+	}): Promise<void> {
 		checkBtn.disabled = true;
 		checkBtn.textContent = "Installing…";
 		showFeedback(`Downloading v${update.version}…`, "info");
@@ -4378,20 +4651,29 @@ function buildSyncRows(current: Settings): HTMLElement[] {
 			icloudBtn.textContent = "Creating folder…";
 			try {
 				const setup = await Store.prepareIcloudFolder();
-				const next = { ...(settings ?? current), backend: "folder" as const, folder_path: ICLOUD_FOLDER_PATH };
+				const next = {
+					...(settings ?? current),
+					backend: "folder" as const,
+					folder_path: ICLOUD_FOLDER_PATH,
+				};
 				await Store.setSettings(next);
 				settings = next;
-				const copied = setup.merge.items_added + setup.merge.history_added + setup.merge.collections_added;
-				const mergeMessage = copied > 0
-					? ` Preserved local data: copied ${setup.merge.items_added} item(s), ${setup.merge.history_added} history record(s), and ${setup.merge.collections_added} collection(s).`
-					: " Local data was already present in the sync folder.";
+				const copied =
+					setup.merge.items_added + setup.merge.history_added + setup.merge.collections_added;
+				const mergeMessage =
+					copied > 0
+						? ` Preserved local data: copied ${setup.merge.items_added} item(s), ${setup.merge.history_added} history record(s), and ${setup.merge.collections_added} collection(s).`
+						: " Local data was already present in the sync folder.";
 				syncSetupFeedback = {
 					kind: "success",
 					path: setup.path,
 					message: `Folder ready at ${setup.path}.${mergeMessage} Restart ShiftShift to activate iCloud storage.`,
 				};
 			} catch (error) {
-				syncSetupFeedback = { kind: "error", message: `iCloud Drive setup failed: ${String(error)}` };
+				syncSetupFeedback = {
+					kind: "error",
+					message: `iCloud Drive setup failed: ${String(error)}`,
+				};
 			}
 			await openSettings();
 		};
@@ -4512,13 +4794,18 @@ function previewDraftTheme(colors: ThemeColors, mode: "light" | "dark"): void {
 	}
 }
 
-function buildCustomThemeForm(editing: CustomTheme | null, onSaved: () => Promise<void>): HTMLElement {
+function buildCustomThemeForm(
+	editing: CustomTheme | null,
+	onSaved: () => Promise<void>,
+): HTMLElement {
 	const wrapper = document.createElement("div");
 	wrapper.className = "custom-theme-form";
 
 	const heading = document.createElement("div");
 	heading.className = "custom-theme-form-title";
-	heading.textContent = editing ? `Editing "${editing.name}" — live` : "New theme — starts from what you see now, live as you edit";
+	heading.textContent = editing
+		? `Editing "${editing.name}" — live`
+		: "New theme — starts from what you see now, live as you edit";
 	wrapper.appendChild(heading);
 
 	const nameRow = document.createElement("div");
@@ -4538,7 +4825,9 @@ function buildCustomThemeForm(editing: CustomTheme | null, onSaved: () => Promis
 	nameRow.appendChild(modeSelect);
 	wrapper.appendChild(nameRow);
 
-	const colors: ThemeColors = normalizeThemeColors(editing ? { ...editing.colors } : computedThemeColors());
+	const colors: ThemeColors = normalizeThemeColors(
+		editing ? { ...editing.colors } : computedThemeColors(),
+	);
 
 	const preview = document.createElement("div");
 	preview.className = "theme-preview-strip";
@@ -4572,7 +4861,10 @@ function buildCustomThemeForm(editing: CustomTheme | null, onSaved: () => Promis
 			hexInput.type = "text";
 			hexInput.spellcheck = false;
 			const current = colors[key];
-			const hex = typeof current === "string" && current ? cssColorToHex(current) : cssColorToHex(computedThemeColors()[key] as string);
+			const hex =
+				typeof current === "string" && current
+					? cssColorToHex(current)
+					: cssColorToHex(computedThemeColors()[key] as string);
 			colorInput.value = hex;
 			hexInput.value = hex;
 			const setColor = (next: string): void => {
@@ -4641,7 +4933,9 @@ function buildCustomThemeForm(editing: CustomTheme | null, onSaved: () => Promis
 		const opt = document.createElement("option");
 		opt.value = value;
 		opt.textContent = label;
-		opt.selected = colors.font_family === value || (value !== "" && colors.font_family.startsWith(value.split(",")[0]!));
+		opt.selected =
+			colors.font_family === value ||
+			(value !== "" && colors.font_family.startsWith(value.split(",")[0]!));
 		fontSelect.appendChild(opt);
 	}
 	fontSelect.onchange = () => {
@@ -4713,7 +5007,11 @@ function buildCustomThemeForm(editing: CustomTheme | null, onSaved: () => Promis
 	return wrapper;
 }
 
-function buildCustomThemeRow(theme: CustomTheme, onEdit: () => void, onDeleted: () => Promise<void>): HTMLElement {
+function buildCustomThemeRow(
+	theme: CustomTheme,
+	onEdit: () => void,
+	onDeleted: () => Promise<void>,
+): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "settings-row template-row";
 
@@ -4746,7 +5044,11 @@ function buildCustomThemeRow(theme: CustomTheme, onEdit: () => void, onDeleted: 
 }
 
 /** Self-contained widget: rebuilds its own children on every mutation (create/edit/delete/import), so editing state doesn't need to live outside this function. */
-function renderCustomThemesSection(container: HTMLElement, themes: CustomTheme[], editingId: string | null): void {
+function renderCustomThemesSection(
+	container: HTMLElement,
+	themes: CustomTheme[],
+	editingId: string | null,
+): void {
 	container.innerHTML = "";
 	const refresh = async (nextEditingId: string | null): Promise<void> => {
 		customThemesCache = await Store.listCustomThemes();
@@ -4754,7 +5056,13 @@ function renderCustomThemesSection(container: HTMLElement, themes: CustomTheme[]
 	};
 
 	for (const theme of themes) {
-		container.appendChild(buildCustomThemeRow(theme, () => void refresh(theme.id), () => refresh(null)));
+		container.appendChild(
+			buildCustomThemeRow(
+				theme,
+				() => void refresh(theme.id),
+				() => refresh(null),
+			),
+		);
 	}
 
 	const editing = themes.find((t) => t.id === editingId) ?? null;
@@ -4766,7 +5074,11 @@ function renderCustomThemesSection(container: HTMLElement, themes: CustomTheme[]
 	const exportBtn = document.createElement("button");
 	exportBtn.textContent = "Export to clipboard";
 	exportBtn.onclick = async () => {
-		const payload = customThemesCache.map((t) => ({ name: t.name, mode: t.mode, colors: t.colors }));
+		const payload = customThemesCache.map((t) => ({
+			name: t.name,
+			mode: t.mode,
+			colors: t.colors,
+		}));
 		await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
 		exportBtn.textContent = "Copied!";
 		setTimeout(() => (exportBtn.textContent = "Export to clipboard"), 1500);
@@ -4871,7 +5183,10 @@ function buildSettingsNav(): HTMLElement {
 		const btn = document.createElement("button");
 		btn.className = "settings-nav-btn";
 		btn.textContent = label;
-		btn.onclick = () => document.getElementById(sectionId(target))?.scrollIntoView({ block: "start", behavior: "smooth" });
+		btn.onclick = () =>
+			document
+				.getElementById(sectionId(target))
+				?.scrollIntoView({ block: "start", behavior: "smooth" });
 		nav.appendChild(btn);
 	}
 	sticky.appendChild(nav);
@@ -4886,7 +5201,11 @@ function buildSettingsNav(): HTMLElement {
 function buildSyncStatusRow(status: SyncStatus): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "settings-row sync-status-row";
-	const backendLabels: Record<SyncStatus["active_backend"], string> = { local: "Local", s3: "S3", folder: "Folder" };
+	const backendLabels: Record<SyncStatus["active_backend"], string> = {
+		local: "Local",
+		s3: "S3",
+		folder: "Folder",
+	};
 	const label = document.createElement("span");
 	if (status.fallback_reason) {
 		label.textContent = `⚠️ Using ${backendLabels[status.active_backend]} — ${status.fallback_reason}`;
@@ -4941,7 +5260,10 @@ function buildSyncSetupFeedbackRow(): HTMLElement | null {
 			try {
 				await relaunch();
 			} catch (error) {
-				syncSetupFeedback = { kind: "error", message: `Could not restart ShiftShift: ${String(error)}` };
+				syncSetupFeedback = {
+					kind: "error",
+					message: `Could not restart ShiftShift: ${String(error)}`,
+				};
 				await openSettings();
 			}
 		};
@@ -4963,7 +5285,14 @@ function buildSyncTimingRow(): HTMLElement {
 async function openSettings(): Promise<void> {
 	const firstOpen = settingsView.hidden;
 	const savedScroll = firstOpen ? 0 : settingsView.scrollTop;
-	const [current, templates, savedCollections, syncStatus, accessibilityTrusted, inputMonitoringGranted] = await Promise.all([
+	const [
+		current,
+		templates,
+		savedCollections,
+		syncStatus,
+		accessibilityTrusted,
+		inputMonitoringGranted,
+	] = await Promise.all([
 		loadSettings(),
 		Store.listTemplates(),
 		Store.listCollections(),
@@ -4998,7 +5327,9 @@ async function openSettings(): Promise<void> {
 	customThemesDetails.appendChild(customThemesSection);
 	settingsView.appendChild(customThemesDetails);
 
-	settingsView.appendChild(heading("Capture behavior", "capture save silent paste highlight sort mode"));
+	settingsView.appendChild(
+		heading("Capture behavior", "capture save silent paste highlight sort mode"),
+	);
 	settingsView.appendChild(buildCaptureModeRow(current));
 	settingsView.appendChild(buildHighlightSubmitRow(current));
 	settingsView.appendChild(buildSortRow(current));
@@ -5012,21 +5343,29 @@ async function openSettings(): Promise<void> {
 	settingsView.appendChild(heading("Visibility", "dock menubar tray launch"));
 	for (const row of buildVisibilityRows(current)) settingsView.appendChild(row);
 
-	settingsView.appendChild(heading("Double-shift bindings", "key shortcut binding shift tap hotkey"));
 	settingsView.appendChild(
-		buildPermissionStatusRow("Input Monitoring", inputMonitoringGranted, () =>
-			void Store.openInputMonitoringSettings(),
+		heading("Double-shift bindings", "key shortcut binding shift tap hotkey"),
+	);
+	settingsView.appendChild(
+		buildPermissionStatusRow(
+			"Input Monitoring",
+			inputMonitoringGranted,
+			() => void Store.openInputMonitoringSettings(),
 		),
 	);
 	settingsView.appendChild(
-		buildPermissionStatusRow("Accessibility access", accessibilityTrusted, () =>
-			void Store.openAccessibilitySettings(),
+		buildPermissionStatusRow(
+			"Accessibility access",
+			accessibilityTrusted,
+			() => void Store.openAccessibilitySettings(),
 		),
 	);
 	settingsView.appendChild(buildBindingRow("Left Shift", "left", current));
 	settingsView.appendChild(buildBindingRow("Right Shift", "right", current));
 
-	settingsView.appendChild(heading("Fallback shortcuts", "shortcut hotkey key binding fallback accelerator"));
+	settingsView.appendChild(
+		heading("Fallback shortcuts", "shortcut hotkey key binding fallback accelerator"),
+	);
 	settingsView.appendChild(buildShortcutRow("Toggle panel", "fallback_toggle", current));
 	settingsView.appendChild(buildShortcutRow("Capture selection", "fallback_capture", current));
 	settingsView.appendChild(buildShortcutRow("Capture image", "fallback_image", current));
@@ -5044,10 +5383,14 @@ async function openSettings(): Promise<void> {
 	}
 	settingsView.appendChild(buildAddTemplateForm());
 
-	settingsView.appendChild(heading("Collections", "collections views organize tags facets smart saved filter"));
+	settingsView.appendChild(
+		heading("Collections", "collections views organize tags facets smart saved filter"),
+	);
 	settingsView.appendChild(buildCollectionsSettingsSection());
 
-	settingsView.appendChild(heading("Automations", "hooks plugin events command classify organize llm tags apply"));
+	settingsView.appendChild(
+		heading("Automations", "hooks plugin events command classify organize llm tags apply"),
+	);
 	settingsView.appendChild(buildAutomationHooksRow(current));
 
 	settingsView.appendChild(heading("Sync", "sync s3 folder backup encrypt cloud"));
@@ -5093,7 +5436,9 @@ async function openSettings(): Promise<void> {
 	}
 	settingsView.scrollTop = savedScroll;
 	if (firstOpen) {
-		requestAnimationFrame(() => settingsView.querySelector<HTMLInputElement>(".settings-search")?.focus());
+		requestAnimationFrame(() =>
+			settingsView.querySelector<HTMLInputElement>(".settings-search")?.focus(),
+		);
 	}
 }
 

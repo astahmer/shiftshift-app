@@ -50,10 +50,29 @@ import {
 	pointerOnScrollbar,
 	stepLoadedSelection,
 } from "./item-chrome";
-import { Store, type CustomTheme, type HighlightSubmit, type HistoryEntry, type Item, type ItemKind, type Settings, type SortMode, type Template, type ToastPosition } from "./store";
+import {
+	Store,
+	type CustomTheme,
+	type HighlightSubmit,
+	type HistoryEntry,
+	type Item,
+	type ItemKind,
+	type Settings,
+	type SortMode,
+	type Template,
+	type ToastPosition,
+} from "./store";
 import { applyCustomPalette, clearCustomPalette, normalizeTheme, THEMES } from "./themes";
 
-type ResizeDirection = "East" | "North" | "NorthEast" | "NorthWest" | "South" | "SouthEast" | "SouthWest" | "West";
+type ResizeDirection =
+	| "East"
+	| "North"
+	| "NorthEast"
+	| "NorthWest"
+	| "South"
+	| "SouthEast"
+	| "SouthWest"
+	| "West";
 type NotchEdge = "top" | "bottom" | "left" | "right" | "float";
 type NotchAnchor = "start" | "center" | "end";
 type ComposerPlace = "start" | "end";
@@ -143,7 +162,10 @@ const headerCount = root.querySelector<HTMLElement>(".notch-header-count")!;
 const list = root.querySelector<HTMLElement>(".notch-list")!;
 list.addEventListener("scroll", () => {
 	const total = tabItems().length;
-	if (!notchShouldLoadMore(list.scrollTop, list.clientHeight, list.scrollHeight, loadedCount, total)) return;
+	if (
+		!notchShouldLoadMore(list.scrollTop, list.clientHeight, list.scrollHeight, loadedCount, total)
+	)
+		return;
 	loadedCount = nextNotchLoadedCount(loadedCount, total);
 	render();
 });
@@ -241,7 +263,14 @@ let arranging = false;
 let resizing = false;
 let composerActive = false;
 let cardDragging = false;
-let pointerReorder: { id: string; from: number; over: number; x: number; y: number; live: boolean } | null = null;
+let pointerReorder: {
+	id: string;
+	from: number;
+	over: number;
+	x: number;
+	y: number;
+	live: boolean;
+} | null = null;
 let itemCount = 10;
 let loadedCount = NOTCH_PAGE_SIZE;
 let rowHeight = DEFAULT_ROW_HEIGHT;
@@ -288,7 +317,10 @@ function invalidateFiltered(): void {
 
 function tabItems(): Item[] {
 	if (!filteredCache) {
-		filteredCache = applySort(filterItems(scopedItems(), composerInput.value), settings?.sort_mode ?? "manual");
+		filteredCache = applySort(
+			filterItems(scopedItems(), composerInput.value),
+			settings?.sort_mode ?? "manual",
+		);
 	}
 	return filteredCache;
 }
@@ -337,7 +369,10 @@ async function commitPreview(): Promise<void> {
 }
 
 function isPreviewMode(mode: SlashMode | null): boolean {
-	return mode !== null && (mode.type === "theme" || mode.type === "light" || mode.type === "dark" || mode.type === "sort");
+	return (
+		mode !== null &&
+		(mode.type === "theme" || mode.type === "light" || mode.type === "dark" || mode.type === "sort")
+	);
 }
 
 function composerSlashMode(): SlashMode | null {
@@ -349,8 +384,13 @@ function currentSuggestionCount(raw: string): number {
 	if (raw.startsWith("/")) {
 		const mode = parseSlashMode(raw);
 		if (mode.type === "theme" || mode.type === "light" || mode.type === "dark") {
-			const filterMode = mode.type === "light" ? "light" : mode.type === "dark" ? "dark" : undefined;
-			return matchThemeSuggestions(mode.type === "theme" ? mode.query : "", allThemeChoices(), filterMode).length;
+			const filterMode =
+				mode.type === "light" ? "light" : mode.type === "dark" ? "dark" : undefined;
+			return matchThemeSuggestions(
+				mode.type === "theme" ? mode.query : "",
+				allThemeChoices(),
+				filterMode,
+			).length;
 		}
 		if (mode.type === "sort") return matchSortSuggestions(mode.query).length;
 		if (mode.type === "history" || mode.type === "help") return 0;
@@ -547,7 +587,13 @@ async function runNotchChromeAction(item: Item, id: string): Promise<void> {
 	}
 }
 
-function suggestionRow(index: number, icon: string, label: string, hint: string, onClick: () => void): HTMLElement {
+function suggestionRow(
+	index: number,
+	icon: string,
+	label: string,
+	hint: string,
+	onClick: () => void,
+): HTMLElement {
 	const row = document.createElement("div");
 	row.className = "item-row suggestion-row";
 	row.classList.toggle("selected", index === selected);
@@ -585,7 +631,11 @@ function completeHashToken(tag: string): void {
 
 async function commitHighlightedSuggestion(): Promise<void> {
 	const mode = composerSlashMode();
-	if (mode && (mode.type === "theme" || mode.type === "light" || mode.type === "dark") && themeSuggestions[selected]) {
+	if (
+		mode &&
+		(mode.type === "theme" || mode.type === "light" || mode.type === "dark") &&
+		themeSuggestions[selected]
+	) {
 		await commitPreview();
 	} else if (mode?.type === "sort" && sortSuggestions[selected]) {
 		await commitPreview();
@@ -612,7 +662,11 @@ function renderHistoryEntry(entry: HistoryEntry): HTMLElement {
 async function renderHistoryRows(query: string): Promise<void> {
 	const entries = await Store.listHistory(200);
 	const q = query.trim().toLowerCase();
-	const matching = q ? entries.filter((e) => e.action.toLowerCase().includes(q) || (e.detail ?? "").toLowerCase().includes(q)) : entries;
+	const matching = q
+		? entries.filter(
+				(e) => e.action.toLowerCase().includes(q) || (e.detail ?? "").toLowerCase().includes(q),
+			)
+		: entries;
 	if (composerInput.value.trim() !== `/history ${query}`.trim()) return;
 	list.innerHTML = "";
 	if (matching.length === 0) {
@@ -654,7 +708,8 @@ function renderComposerSuggestions(raw: string): boolean {
 		if (previewSnapshot !== null && !isPreviewMode(mode)) cancelPreview();
 		list.innerHTML = "";
 		if (mode.type === "theme" || mode.type === "light" || mode.type === "dark") {
-			const filterMode = mode.type === "light" ? "light" : mode.type === "dark" ? "dark" : undefined;
+			const filterMode =
+				mode.type === "light" ? "light" : mode.type === "dark" ? "dark" : undefined;
 			const query = mode.type === "theme" ? mode.query : "";
 			themeSuggestions = matchThemeSuggestions(query, allThemeChoices(), filterMode);
 			if (selected >= themeSuggestions.length) selected = themeSuggestions.length - 1;
@@ -704,12 +759,18 @@ function renderComposerSuggestions(raw: string): boolean {
 		if (selected >= commandSuggestions.length) selected = commandSuggestions.length - 1;
 		commandSuggestions.forEach((suggestion, index) => {
 			list.appendChild(
-				suggestionRow(index, suggestion.kind === "template" ? "⚡" : "▸", `/${suggestion.name}`, suggestion.hint, () => {
-					composerInput.value = `/${suggestion.name} `;
-					selected = -1;
-					composerInput.focus();
-					render();
-				}),
+				suggestionRow(
+					index,
+					suggestion.kind === "template" ? "⚡" : "▸",
+					`/${suggestion.name}`,
+					suggestion.hint,
+					() => {
+						composerInput.value = `/${suggestion.name} `;
+						selected = -1;
+						composerInput.focus();
+						render();
+					},
+				),
 			);
 		});
 		return true;
@@ -722,7 +783,9 @@ function renderComposerSuggestions(raw: string): boolean {
 		if (selected >= suggestions.length) selected = suggestions.length - 1;
 		list.innerHTML = "";
 		suggestions.forEach((tag, index) => {
-			list.appendChild(suggestionRow(index, "@", `@${tag.tag}`, tag.hint, () => completeAtToken(tag.tag)));
+			list.appendChild(
+				suggestionRow(index, "@", `@${tag.tag}`, tag.hint, () => completeAtToken(tag.tag)),
+			);
 		});
 		return true;
 	}
@@ -776,7 +839,10 @@ function render(): void {
 	}
 
 	const filtered = tabItems();
-	loadedCount = Math.min(Math.max(loadedCount, Math.max(itemCount, NOTCH_PAGE_SIZE)), Math.max(filtered.length, 0));
+	loadedCount = Math.min(
+		Math.max(loadedCount, Math.max(itemCount, NOTCH_PAGE_SIZE)),
+		Math.max(filtered.length, 0),
+	);
 	const visible = filtered.slice(0, loadedCount);
 	if (selected >= visible.length) selected = visible.length - 1;
 
@@ -871,10 +937,20 @@ function render(): void {
 			(e) => {
 				if (e.button !== 0 || e.altKey) return;
 				if (pointerOnScrollbar(list, e.clientX)) return;
-				if (e.target instanceof Element && e.target.closest(".item-action, .item-edit-input, .notch-card-mark, .notch-card-link")) return;
+				if (
+					e.target instanceof Element &&
+					e.target.closest(".item-action, .item-edit-input, .notch-card-mark, .notch-card-link")
+				)
+					return;
 				e.stopPropagation();
 				pointerOrigin = null;
-				pointerReorder = applyListDrag(null, { type: "down", id: item.id, index, x: e.clientX, y: e.clientY }).state;
+				pointerReorder = applyListDrag(null, {
+					type: "down",
+					id: item.id,
+					index,
+					x: e.clientX,
+					y: e.clientY,
+				}).state;
 				try {
 					row.setPointerCapture(e.pointerId);
 				} catch {
@@ -886,7 +962,10 @@ function render(): void {
 		row.addEventListener("contextmenu", (e) => {
 			openItemContextMenu(
 				e,
-				itemContextEntries(item, { inSelection: multiSelected.has(item.id), selectionCount: multiSelected.size }),
+				itemContextEntries(item, {
+					inSelection: multiSelected.has(item.id),
+					selectionCount: multiSelected.size,
+				}),
 				(actionId) => {
 					void runNotchChromeAction(item, actionId);
 				},
@@ -903,7 +982,11 @@ function render(): void {
 		});
 		row.addEventListener("click", (e) => {
 			if (cardDragging || editingId === item.id) return;
-			if (e.target instanceof Element && e.target.closest(".item-action, .notch-card-mark, .notch-card-link")) return;
+			if (
+				e.target instanceof Element &&
+				e.target.closest(".item-action, .notch-card-mark, .notch-card-link")
+			)
+				return;
 			if (e.altKey && item.kind === "image") {
 				e.preventDefault();
 				showImagePreview(item.text);
@@ -993,7 +1076,10 @@ function moveNotchSelection(delta: number): void {
 	const next = stepLoadedSelection(selected, loadedCount, total, delta);
 	selected = next.selected;
 	loadedCount = next.loaded;
-	if (loadedCount !== before || list.querySelectorAll(".notch-card").length !== Math.min(loadedCount, total)) {
+	if (
+		loadedCount !== before ||
+		list.querySelectorAll(".notch-card").length !== Math.min(loadedCount, total)
+	) {
 		render();
 		return;
 	}
@@ -1030,7 +1116,12 @@ async function refresh(options?: { skipUnchanged: boolean } | void): Promise<voi
 				Store.listTemplates(),
 				Store.listCustomThemes(),
 			]);
-			if (!renderRequested && JSON.stringify([settings, items, templatesCache, customThemesCache]) === JSON.stringify([nextSettings, nextItems, nextTemplates, nextThemes])) continue;
+			if (
+				!renderRequested &&
+				JSON.stringify([settings, items, templatesCache, customThemesCache]) ===
+					JSON.stringify([nextSettings, nextItems, nextTemplates, nextThemes])
+			)
+				continue;
 			settings = nextSettings;
 			applyComposerSpellcheck(nextSettings.input_spellcheck);
 			items = nextItems;
@@ -1038,7 +1129,8 @@ async function refresh(options?: { skipUnchanged: boolean } | void): Promise<voi
 			customThemesCache = nextThemes;
 			invalidateFiltered();
 			itemCount = Math.max(1, nextSettings.dock_item_count || 10);
-			rowHeight = nextSettings.dock_row_height > 0 ? nextSettings.dock_row_height : DEFAULT_ROW_HEIGHT;
+			rowHeight =
+				nextSettings.dock_row_height > 0 ? nextSettings.dock_row_height : DEFAULT_ROW_HEIGHT;
 			root.dataset.edge = edgeFromPosition(nextSettings.dock_position);
 			root.dataset.anchor = anchorFromPosition(nextSettings.dock_position);
 			if (previewSnapshot === null) applyTheme(nextSettings.theme);
@@ -1055,16 +1147,18 @@ async function refresh(options?: { skipUnchanged: boolean } | void): Promise<voi
 void refresh();
 
 listen("refresh", () => void refresh());
-void Store.getSyncStatus().then((status) => {
-    if (status.active_backend === "local") return;
-    const stop = startSyncRefresh({
-        refresh: () => refresh({ skipUnchanged: true }),
-        isVisible: () => getCurrentWindow().isVisible(),
-        intervalMs: status.active_backend === "s3" ? 15000 : 3000,
-        onError: (error) => console.error("Sync refresh failed", error),
-    });
-    window.addEventListener("pagehide", stop, { once: true });
-}).catch((error) => console.error("Sync status unavailable", error));
+void Store.getSyncStatus()
+	.then((status) => {
+		if (status.active_backend === "local") return;
+		const stop = startSyncRefresh({
+			refresh: () => refresh({ skipUnchanged: true }),
+			isVisible: () => getCurrentWindow().isVisible(),
+			intervalMs: status.active_backend === "s3" ? 15000 : 3000,
+			onError: (error) => console.error("Sync refresh failed", error),
+		});
+		window.addEventListener("pagehide", stop, { once: true });
+	})
+	.catch((error) => console.error("Sync status unavailable", error));
 
 listen<boolean>("dock-set-expanded", (event) => {
 	applyExpanded(event.payload);
@@ -1124,7 +1218,9 @@ function markCardOver(overIndex: number): void {
 	const rows = [...list.querySelectorAll<HTMLElement>(".notch-card[data-drag-index]")];
 	rows.find((el) => el.dataset.id === pointerReorder?.id)?.classList.add("is-dragging");
 	const target = rows.find((el) => Number(el.dataset.dragIndex) === overIndex);
-	target?.classList.add(overIndex > (pointerReorder?.from ?? 0) ? "is-drop-after" : "is-drop-before");
+	target?.classList.add(
+		overIndex > (pointerReorder?.from ?? 0) ? "is-drop-after" : "is-drop-before",
+	);
 }
 
 document.addEventListener("pointerleave", () => {
@@ -1141,11 +1237,20 @@ window.addEventListener("pointermove", (e) => {
 		const under = document.elementFromPoint(e.clientX, e.clientY);
 		if (pointerOnScrollbar(list, e.clientX)) {
 			/* scrollbar click */
-		} else if (under instanceof Element && under.closest(".item-action, .item-edit-input, .notch-card-mark")) {
+		} else if (
+			under instanceof Element &&
+			under.closest(".item-action, .item-edit-input, .notch-card-mark")
+		) {
 			/* delete / todo mark keep their own press */
 		} else if (row && id && !Number.isNaN(index)) {
 			pointerOrigin = null;
-			pointerReorder = applyListDrag(null, { type: "down", id, index, x: e.clientX, y: e.clientY }).state;
+			pointerReorder = applyListDrag(null, {
+				type: "down",
+				id,
+				index,
+				x: e.clientX,
+				y: e.clientY,
+			}).state;
 			try {
 				row.setPointerCapture(e.pointerId);
 			} catch {
@@ -1401,7 +1506,10 @@ composerInput.addEventListener("keydown", (e) => {
 		}
 		if (
 			slashMode &&
-			(slashMode.type === "theme" || slashMode.type === "light" || slashMode.type === "dark" || slashMode.type === "sort")
+			(slashMode.type === "theme" ||
+				slashMode.type === "light" ||
+				slashMode.type === "dark" ||
+				slashMode.type === "sort")
 		) {
 			e.preventDefault();
 			void commitHighlightedSuggestion();
@@ -1426,7 +1534,9 @@ composerInput.addEventListener("keydown", (e) => {
 			const rows = tabItems();
 			const highlighted = selected >= 0 ? rows[selected] : undefined;
 			const pick =
-				highlighted && highlighted.kind !== "image" ? highlighted : rows.find((row) => row.kind !== "image");
+				highlighted && highlighted.kind !== "image"
+					? highlighted
+					: rows.find((row) => row.kind !== "image");
 			if (pick) {
 				composerInput.value = pick.text;
 				selected = 0;
@@ -1439,7 +1549,13 @@ composerInput.addEventListener("keydown", (e) => {
 		return;
 	}
 
-	if (e.altKey && empty && selected >= 0 && visible[selected] && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+	if (
+		e.altKey &&
+		empty &&
+		selected >= 0 &&
+		visible[selected] &&
+		(e.key === "ArrowUp" || e.key === "ArrowDown")
+	) {
 		e.preventDefault();
 		void pinComposer();
 		const movedId = visible[selected]!.id;
@@ -1482,7 +1598,8 @@ composerInput.addEventListener("keydown", (e) => {
 		void pinComposer();
 		if (inSuggest) {
 			if (suggestionCount === 0) return;
-			selected = selected < 0 ? suggestionCount - 1 : (selected - 1 + suggestionCount) % suggestionCount;
+			selected =
+				selected < 0 ? suggestionCount - 1 : (selected - 1 + suggestionCount) % suggestionCount;
 			render();
 			return;
 		}
@@ -1503,7 +1620,13 @@ composerInput.addEventListener("keydown", (e) => {
 		return;
 	}
 
-	if (e.key === " " && empty && selected >= 0 && visible[selected] && ((e.ctrlKey && !e.metaKey) || multiSelected.size > 0)) {
+	if (
+		e.key === " " &&
+		empty &&
+		selected >= 0 &&
+		visible[selected] &&
+		((e.ctrlKey && !e.metaKey) || multiSelected.size > 0)
+	) {
 		e.preventDefault();
 		toggleNotchMulti();
 		return;
@@ -1525,7 +1648,13 @@ composerInput.addEventListener("keydown", (e) => {
 		if (any) void runNotchChromeAction(any, "delete_selection");
 		return;
 	}
-	if (modKey && (e.key === "Backspace" || e.key === "Delete") && empty && selected >= 0 && visible[selected]) {
+	if (
+		modKey &&
+		(e.key === "Backspace" || e.key === "Delete") &&
+		empty &&
+		selected >= 0 &&
+		visible[selected]
+	) {
 		e.preventDefault();
 		void (async () => {
 			await Store.deleteItem(visible[selected]!.id);
@@ -1554,7 +1683,13 @@ composerInput.addEventListener("keydown", (e) => {
 		if (any) void runNotchChromeAction(any, "todo_selection");
 		return;
 	}
-	if (modKey && e.key.toLowerCase() === "t" && selected >= 0 && visible[selected] && visible[selected]!.kind !== "image") {
+	if (
+		modKey &&
+		e.key.toLowerCase() === "t" &&
+		selected >= 0 &&
+		visible[selected] &&
+		visible[selected]!.kind !== "image"
+	) {
 		e.preventDefault();
 		void (async () => {
 			const current = visible[selected]!;
@@ -1563,12 +1698,23 @@ composerInput.addEventListener("keydown", (e) => {
 		})();
 		return;
 	}
-	if (modKey && e.key.toLowerCase() === "e" && selected >= 0 && visible[selected] && visible[selected]!.kind !== "image") {
+	if (
+		modKey &&
+		e.key.toLowerCase() === "e" &&
+		selected >= 0 &&
+		visible[selected] &&
+		visible[selected]!.kind !== "image"
+	) {
 		e.preventDefault();
 		startNotchEdit(visible[selected]!.id);
 		return;
 	}
-	if (modKey && e.key.toLowerCase() === "o" && selected >= 0 && visible[selected]?.kind === "link") {
+	if (
+		modKey &&
+		e.key.toLowerCase() === "o" &&
+		selected >= 0 &&
+		visible[selected]?.kind === "link"
+	) {
 		e.preventDefault();
 		void runNotchChromeAction(visible[selected]!, "open");
 		return;

@@ -1,5 +1,11 @@
 export type UpdateErrorPhase = "check" | "install";
-export type UpdateErrorKind = "feed-missing" | "configuration" | "network" | "feed" | "verification" | "unknown";
+export type UpdateErrorKind =
+	| "feed-missing"
+	| "configuration"
+	| "network"
+	| "feed"
+	| "verification"
+	| "unknown";
 
 export type UpdateErrorDescription = {
 	kind: UpdateErrorKind;
@@ -24,11 +30,17 @@ export function updateErrorDetail(error: unknown): string {
 	return String(error);
 }
 
-export function describeUpdateError(error: unknown, phase: UpdateErrorPhase = "check"): UpdateErrorDescription {
+export function describeUpdateError(
+	error: unknown,
+	phase: UpdateErrorPhase = "check",
+): UpdateErrorDescription {
 	const detail = updateErrorDetail(error);
 	const normalized = detail.toLowerCase();
 
-	if (normalized.includes("updater does not have any endpoints") || normalized.includes("no configured endpoints")) {
+	if (
+		normalized.includes("updater does not have any endpoints") ||
+		normalized.includes("no configured endpoints")
+	) {
 		return {
 			kind: "configuration",
 			message: "Update checking is not configured in this build.",
@@ -64,7 +76,11 @@ export function describeUpdateError(error: unknown, phase: UpdateErrorPhase = "c
 		};
 	}
 
-	if (normalized.includes("signature") || normalized.includes("public key") || normalized.includes("verify")) {
+	if (
+		normalized.includes("signature") ||
+		normalized.includes("public key") ||
+		normalized.includes("verify")
+	) {
 		return {
 			kind: "verification",
 			message: "The update could not be verified. Please install the latest release manually.",
@@ -85,14 +101,20 @@ export function describeUpdateError(error: unknown, phase: UpdateErrorPhase = "c
 	) {
 		return {
 			kind: "network",
-			message: phase === "check" ? "Could not reach the update server. Check your internet connection." : "Could not download the update. Check your internet connection.",
+			message:
+				phase === "check"
+					? "Could not reach the update server. Check your internet connection."
+					: "Could not download the update. Check your internet connection.",
 			detail,
 		};
 	}
 
 	return {
 		kind: "unknown",
-		message: phase === "check" ? "Could not check for updates. Try again later." : "Could not install the update. Try again later.",
+		message:
+			phase === "check"
+				? "Could not check for updates. Try again later."
+				: "Could not install the update. Try again later.",
 		detail,
 	};
 }

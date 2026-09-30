@@ -141,7 +141,10 @@ export function buildListTabs(
 	automationViews: AutomationView[] = [],
 ): Array<{ id: ListTab; label: string }> {
 	const builtins = separateTagTabs
-		? [...BUILTIN_LIST_TABS, ...extractTags(items).map((tag) => ({ id: `tag:${tag}` as const, label: `#${tag}` }))]
+		? [
+				...BUILTIN_LIST_TABS,
+				...extractTags(items).map((tag) => ({ id: `tag:${tag}` as const, label: `#${tag}` })),
+			]
 		: [...BUILTIN_LIST_TABS, { id: "tags" as const, label: "Tags" }];
 	const collectionTabs = collections.map((collection) => ({
 		id: `collection:${collection.id}` as const,
@@ -155,7 +158,8 @@ export function buildListTabs(
 }
 
 function itemHasTag(item: Item, tag: string): boolean {
-	if ((item.tags ?? []).some((candidate) => candidate.toLowerCase() === tag.toLowerCase())) return true;
+	if ((item.tags ?? []).some((candidate) => candidate.toLowerCase() === tag.toLowerCase()))
+		return true;
 	for (const match of item.text.matchAll(HASHTAG_PATTERN)) {
 		if (match[1]!.toLowerCase() === tag.toLowerCase()) return true;
 	}
@@ -231,17 +235,25 @@ export function itemsForTab(
 		return items.filter((item) => itemHasTag(item, tag));
 	}
 	if (tab.startsWith("collection:")) {
-		const collection = collections.find((candidate) => candidate.id === tab.slice("collection:".length));
+		const collection = collections.find(
+			(candidate) => candidate.id === tab.slice("collection:".length),
+		);
 		return collection ? items.filter((item) => matchesCollectionQuery(item, collection.query)) : [];
 	}
 	if (tab.startsWith("automation:")) {
-		const view = automationViews.find((candidate) => candidate.id === tab.slice("automation:".length));
+		const view = automationViews.find(
+			(candidate) => candidate.id === tab.slice("automation:".length),
+		);
 		return view ? items.filter((item) => matchesCollectionQuery(item, view.query)) : [];
 	}
 	return items;
 }
 
-export function nextListTab(tabs: Array<{ id: ListTab }>, current: ListTab, delta: number): ListTab {
+export function nextListTab(
+	tabs: Array<{ id: ListTab }>,
+	current: ListTab,
+	delta: number,
+): ListTab {
 	const index = tabs.findIndex((tab) => tab.id === current);
 	// The current tab can be absent from `tabs` (its only tag was removed,
 	// or tags just got hidden by a settings change) — start from the front
@@ -257,18 +269,30 @@ export function emptyTabCopy(
 	selectedTagsCount = 0,
 ): { title: string; body: string } {
 	if (tab === "tags" && selectedTagsCount === 0) {
-		return { title: "Pick a tag", body: "Select one or more tags above to see everything tagged with them." };
+		return {
+			title: "Pick a tag",
+			body: "Select one or more tags above to see everything tagged with them.",
+		};
 	}
-	if (hasFilter) return { title: "No matches", body: "Clear the filter or try another @tag / #tag." };
-	if (tab === "bookmarked") return { title: "No bookmarks", body: "Bookmark something and it shows up here." };
-	if (tab === "images") return { title: "No images", body: "Captured screenshots and pictures wait here." };
-	if (tab === "todos") return { title: "No TODOs", body: "Turn a note into a todo and it lands here." };
-	if (tab === "tags") return { title: "No matches", body: "Nothing tagged with the selected tags." };
-	if (tab.startsWith("tag:")) return { title: "No matches", body: `Nothing tagged #${tab.slice(4)} yet.` };
+	if (hasFilter)
+		return { title: "No matches", body: "Clear the filter or try another @tag / #tag." };
+	if (tab === "bookmarked")
+		return { title: "No bookmarks", body: "Bookmark something and it shows up here." };
+	if (tab === "images")
+		return { title: "No images", body: "Captured screenshots and pictures wait here." };
+	if (tab === "todos")
+		return { title: "No TODOs", body: "Turn a note into a todo and it lands here." };
+	if (tab === "tags")
+		return { title: "No matches", body: "Nothing tagged with the selected tags." };
+	if (tab.startsWith("tag:"))
+		return { title: "No matches", body: `Nothing tagged #${tab.slice(4)} yet.` };
 	if (tab.startsWith("collection:") || tab.startsWith("automation:")) {
 		return { title: "No matches", body: "Nothing currently matches this view." };
 	}
-	return { title: "Nothing captured yet", body: "An answer, a link, a half-formed prompt. It all waits here." };
+	return {
+		title: "Nothing captured yet",
+		body: "An answer, a link, a half-formed prompt. It all waits here.",
+	};
 }
 
 /**
@@ -283,7 +307,8 @@ export function filterItems(items: Item[], query: string): Item[] {
 	for (const token of tokens) {
 		const predicate = tagPredicate(token);
 		if (predicate) predicates.push(predicate);
-		else if (/^#[A-Za-z_][\w-]*$/.test(token)) predicates.push((item) => itemHasTag(item, token.slice(1)));
+		else if (/^#[A-Za-z_][\w-]*$/.test(token))
+			predicates.push((item) => itemHasTag(item, token.slice(1)));
 		else textWords.push(token);
 	}
 	const text = textWords.join(" ").toLowerCase();
@@ -310,7 +335,9 @@ const SORT_COMPARATORS: Record<Exclude<SortMode, "manual">, (a: Item, b: Item) =
 export function applySort(items: Item[], mode: SortMode): Item[] {
 	if (mode === "manual") return items;
 	const compare = SORT_COMPARATORS[mode];
-	return [...items].sort((a, b) => (b.bookmarked === a.bookmarked ? compare(a, b) : Number(b.bookmarked) - Number(a.bookmarked)));
+	return [...items].sort((a, b) =>
+		b.bookmarked === a.bookmarked ? compare(a, b) : Number(b.bookmarked) - Number(a.bookmarked),
+	);
 }
 
 export const SORT_OPTIONS: Array<{ mode: SortMode; label: string }> = [
@@ -325,7 +352,9 @@ export const SORT_OPTIONS: Array<{ mode: SortMode; label: string }> = [
 export function matchSortSuggestions(query: string): Array<{ mode: SortMode; label: string }> {
 	const q = query.trim().toLowerCase();
 	if (!q) return SORT_OPTIONS;
-	return SORT_OPTIONS.filter((o) => o.mode.toLowerCase().includes(q) || o.label.toLowerCase().includes(q));
+	return SORT_OPTIONS.filter(
+		(o) => o.mode.toLowerCase().includes(q) || o.label.toLowerCase().includes(q),
+	);
 }
 
 export const BUILTIN_COMMANDS: Array<{ name: string; hint: string }> = [
@@ -354,7 +383,11 @@ export interface SlashSuggestion {
 export function matchSlashSuggestions(query: string, templates: Template[]): SlashSuggestion[] {
 	const prefix = (query.slice(1).split(/\s+/)[0] ?? "").toLowerCase();
 	const builtins: SlashSuggestion[] = BUILTIN_COMMANDS.map((c) => ({ ...c, kind: "builtin" }));
-	const fromTemplates: SlashSuggestion[] = templates.map((t) => ({ name: t.name, hint: t.body, kind: "template" }));
+	const fromTemplates: SlashSuggestion[] = templates.map((t) => ({
+		name: t.name,
+		hint: t.body,
+		kind: "template",
+	}));
 	return [...builtins, ...fromTemplates].filter((s) => s.name.toLowerCase().startsWith(prefix));
 }
 
@@ -388,16 +421,40 @@ export function parseSlashMode(raw: string): SlashMode {
 }
 
 export const HELP_SHORTCUTS: Array<{ category: string; shortcut: string; description: string }> = [
-	{ category: "Capture", shortcut: "double-tap Shift", description: "Capture the current selection" },
-	{ category: "Capture", shortcut: "⌘Enter", description: "Force-save typed text and stay open (does not copy)" },
-	{ category: "Capture", shortcut: "⇧Enter", description: "Force-save typed text, copy it, and stay open" },
+	{
+		category: "Capture",
+		shortcut: "double-tap Shift",
+		description: "Capture the current selection",
+	},
+	{
+		category: "Capture",
+		shortcut: "⌘Enter",
+		description: "Force-save typed text and stay open (does not copy)",
+	},
+	{
+		category: "Capture",
+		shortcut: "⇧Enter",
+		description: "Force-save typed text, copy it, and stay open",
+	},
 	{ category: "Capture", shortcut: "⌘V", description: "Paste a clipboard image as an image item" },
 	{ category: "Browse", shortcut: "↑ / ↓", description: "Move selection (wraps at both ends)" },
 	{ category: "Browse", shortcut: "Enter", description: "Copy/open the selected item and close" },
 	{ category: "Browse", shortcut: "⌘O", description: "Open the selected link externally" },
-	{ category: "Browse", shortcut: "Tab", description: "Complete the highlighted item or suggestion; empty Tab switches list tabs" },
-	{ category: "Browse", shortcut: "⌘C", description: "Copy the selection (newline-joined) without closing" },
-	{ category: "Browse", shortcut: "Preview / Shift+→", description: "Open the full detail view from a row action, right-click, or ⌘P" },
+	{
+		category: "Browse",
+		shortcut: "Tab",
+		description: "Complete the highlighted item or suggestion; empty Tab switches list tabs",
+	},
+	{
+		category: "Browse",
+		shortcut: "⌘C",
+		description: "Copy the selection (newline-joined) without closing",
+	},
+	{
+		category: "Browse",
+		shortcut: "Preview / Shift+→",
+		description: "Open the full detail view from a row action, right-click, or ⌘P",
+	},
 	{ category: "Browse", shortcut: "⌥-click", description: "Open image in Preview" },
 	{ category: "Organize", shortcut: "⌘B", description: "Toggle bookmark" },
 	{ category: "Organize", shortcut: "⌘T", description: "Toggle todo/note" },
@@ -405,16 +462,40 @@ export const HELP_SHORTCUTS: Array<{ category: string; shortcut: string; descrip
 	{ category: "Organize", shortcut: "⌥↑ / ⌥↓", description: "Reorder (unfiltered view only)" },
 	{ category: "Organize", shortcut: "⌘⌫", description: "Delete" },
 	{ category: "Organize", shortcut: "⌘Z / ⌘⇧Z", description: "Undo / redo" },
-	{ category: "Multi-select", shortcut: "Shift+↑ / Shift+↓", description: "Extend or shrink a contiguous range" },
-	{ category: "Multi-select", shortcut: "⌃Space", description: "Toggle the highlighted row in or out, without moving" },
-	{ category: "Multi-select", shortcut: "⇧-click", description: "Toggle a row in or out of the selection" },
+	{
+		category: "Multi-select",
+		shortcut: "Shift+↑ / Shift+↓",
+		description: "Extend or shrink a contiguous range",
+	},
+	{
+		category: "Multi-select",
+		shortcut: "⌃Space",
+		description: "Toggle the highlighted row in or out, without moving",
+	},
+	{
+		category: "Multi-select",
+		shortcut: "⇧-click",
+		description: "Toggle a row in or out of the selection",
+	},
 	{ category: "Multi-select", shortcut: "Enter", description: "Copy selection as a numbered list" },
-	{ category: "Multi-select", shortcut: "⌘⌫ / ⌘B / ⌘T", description: "Bulk delete / bookmark / todo-toggle" },
+	{
+		category: "Multi-select",
+		shortcut: "⌘⌫ / ⌘B / ⌘T",
+		description: "Bulk delete / bookmark / todo-toggle",
+	},
 	{ category: "Pins", shortcut: "⌘1-⌘9", description: "Copy the item pinned to that slot" },
 	{ category: "Pins", shortcut: "⌘⇧1-⌘⇧9", description: "Pin the selected item to that slot" },
-	{ category: "Filters", shortcut: "@tag", description: "Filter by @bookmarks/@links/@todos/@notes" },
+	{
+		category: "Filters",
+		shortcut: "@tag",
+		description: "Filter by @bookmarks/@links/@todos/@notes",
+	},
 	{ category: "Filters", shortcut: "#tag", description: "Filter/tag by hashtag" },
-	{ category: "Commands", shortcut: "/theme, /sort, /history, /todo", description: "Type / to see all commands" },
+	{
+		category: "Commands",
+		shortcut: "/theme, /sort, /history, /todo",
+		description: "Type / to see all commands",
+	},
 ];
 
 export interface FuzzyMatch {
@@ -458,7 +539,10 @@ export interface MatchedHelpEntry {
 /** `/help <query>` narrows the shortcut list to entries whose description fuzzy-matches, best match first. */
 export function matchHelpEntries(query: string): MatchedHelpEntry[] {
 	if (!query.trim()) return HELP_SHORTCUTS.map((entry) => ({ ...entry, descriptionRanges: [] }));
-	const matches = HELP_SHORTCUTS.map((entry) => ({ entry, match: fuzzyMatch(query, entry.description) })).filter(
+	const matches = HELP_SHORTCUTS.map((entry) => ({
+		entry,
+		match: fuzzyMatch(query, entry.description),
+	})).filter(
 		(m): m is { entry: (typeof HELP_SHORTCUTS)[number]; match: FuzzyMatch } => m.match !== null,
 	);
 	matches.sort((a, b) => b.match.score - a.match.score);
@@ -472,7 +556,11 @@ export interface ThemeChoice {
 }
 
 /** What `/theme <query>` (or `/light`, `/dark` filtered to one mode) narrows down to — built-in and custom themes merged by the caller. */
-export function matchThemeSuggestions(query: string, themes: ThemeChoice[], filterMode?: "light" | "dark"): ThemeChoice[] {
+export function matchThemeSuggestions(
+	query: string,
+	themes: ThemeChoice[],
+	filterMode?: "light" | "dark",
+): ThemeChoice[] {
 	const q = query.trim().toLowerCase();
 	const compact = q.replace(/[\s_-]+/g, "");
 	return themes.filter((t) => {
@@ -481,7 +569,10 @@ export function matchThemeSuggestions(query: string, themes: ThemeChoice[], filt
 		return (
 			t.label.toLowerCase().includes(q) ||
 			t.id.toLowerCase().includes(q) ||
-			t.label.toLowerCase().replace(/[\s_-]+/g, "").includes(compact)
+			t.label
+				.toLowerCase()
+				.replace(/[\s_-]+/g, "")
+				.includes(compact)
 		);
 	});
 }
@@ -582,7 +673,8 @@ export function parseInlineMarkdown(text: string): MdSegment[] {
 	INLINE_MARKDOWN.lastIndex = 0;
 	let match: RegExpExecArray | null;
 	while ((match = INLINE_MARKDOWN.exec(text))) {
-		if (match.index > lastIndex) segments.push({ type: "text", text: text.slice(lastIndex, match.index) });
+		if (match.index > lastIndex)
+			segments.push({ type: "text", text: text.slice(lastIndex, match.index) });
 		if (match[1] !== undefined) segments.push({ type: "bold", text: match[1] });
 		else if (match[2] !== undefined) segments.push({ type: "code", text: match[2] });
 		else if (match[3] !== undefined) segments.push({ type: "tag", text: match[3] });
@@ -662,12 +754,21 @@ export function normalizeTagInput(raw: string): string {
 	return raw.trim().replace(/^#/, "").replace(/\s+/g, "-");
 }
 
-const THEME_COLOR_KEYS: Array<keyof ThemeColors> = ["bg", "fg", "muted", "row_bg", "accent", "accent_fg", "border"];
+const THEME_COLOR_KEYS: Array<keyof ThemeColors> = [
+	"bg",
+	"fg",
+	"muted",
+	"row_bg",
+	"accent",
+	"accent_fg",
+	"border",
+];
 
 export function isImportableThemeColors(value: unknown): value is ThemeColors {
 	if (typeof value !== "object" || value === null) return false;
 	const record = value as Record<string, unknown>;
-	if (!THEME_COLOR_KEYS.every((key) => typeof record[key] === "string" && record[key] !== "")) return false;
+	if (!THEME_COLOR_KEYS.every((key) => typeof record[key] === "string" && record[key] !== ""))
+		return false;
 	return true;
 }
 
@@ -693,7 +794,12 @@ export function normalizeThemeColors(value: ThemeColors): ThemeColors {
 		danger: value.danger ?? "",
 		meta: value.meta ?? "",
 		radius: typeof value.radius === "number" ? value.radius : 16,
-		window_radius: typeof value.window_radius === "number" ? value.window_radius : typeof value.radius === "number" ? value.radius : 16,
+		window_radius:
+			typeof value.window_radius === "number"
+				? value.window_radius
+				: typeof value.radius === "number"
+					? value.radius
+					: 16,
 		radius_sm: typeof value.radius_sm === "number" ? value.radius_sm : 10,
 		font_family: value.font_family ?? "",
 		font_size: typeof value.font_size === "number" ? value.font_size : 14,
@@ -707,7 +813,9 @@ export function normalizeThemeColors(value: ThemeColors): ThemeColors {
 }
 
 /** Validates untrusted clipboard JSON before it's handed to the `add_custom_theme` command. */
-export function isImportableTheme(value: unknown): value is { name: string; mode: "light" | "dark"; colors: ThemeColors } {
+export function isImportableTheme(
+	value: unknown,
+): value is { name: string; mode: "light" | "dark"; colors: ThemeColors } {
 	if (typeof value !== "object" || value === null) return false;
 	const record = value as Record<string, unknown>;
 	if (typeof record.name !== "string" || record.name.length === 0) return false;
@@ -725,9 +833,32 @@ const SETTINGS_SEARCH_ALIASES: Record<string, readonly string[]> = {
 	toast: ["toast", "notify", "notification", "position", "edge", "icon"],
 	notify: ["toast", "notify", "notification", "alert", "sound", "icon"],
 	alert: ["toast", "notify", "notification", "alert"],
-	theme: ["theme", "look", "appearance", "color", "opacity", "palette", "font", "radius", "win95", "vista", "codex", "terminal"],
+	theme: [
+		"theme",
+		"look",
+		"appearance",
+		"color",
+		"opacity",
+		"palette",
+		"font",
+		"radius",
+		"win95",
+		"vista",
+		"codex",
+		"terminal",
+	],
 	look: ["theme", "look", "appearance", "color", "font"],
-	capture: ["capture", "save", "silent", "paste", "highlight", "sort", "mode", "spellcheck", "autocorrect"],
+	capture: [
+		"capture",
+		"save",
+		"silent",
+		"paste",
+		"highlight",
+		"sort",
+		"mode",
+		"spellcheck",
+		"autocorrect",
+	],
 	spellcheck: ["spellcheck", "autocorrect", "correct", "bonjour"],
 	autocorrect: ["spellcheck", "autocorrect", "correct"],
 	pin: ["pin", "pinned", "slot", "shortcut", "quick"],
@@ -758,7 +889,11 @@ export function settingsSearchMatches(query: string, text: string): boolean {
 	return expandSettingsQuery(query).some((term) => hay.includes(term));
 }
 
-export function rankForDrop(visible: Array<{ id: string; rank: number }>, dragId: string, toIndex: number): number {
+export function rankForDrop(
+	visible: Array<{ id: string; rank: number }>,
+	dragId: string,
+	toIndex: number,
+): number {
 	const fromIndex = visible.findIndex((item) => item.id === dragId);
 	const rest = visible.filter((item) => item.id !== dragId);
 	let insertAt = toIndex;
@@ -814,10 +949,20 @@ export type ListDragEffect =
  * In-list reorder vs drag-out. External starts only after the pointer
  * leaves the window — starting earlier steals the gesture and kills rearrange.
  */
-export function applyListDrag(state: ListDragState | null, event: ListDragEvent): { state: ListDragState | null; effect: ListDragEffect } {
+export function applyListDrag(
+	state: ListDragState | null,
+	event: ListDragEvent,
+): { state: ListDragState | null; effect: ListDragEffect } {
 	if (event.type === "down") {
 		return {
-			state: { id: event.id, from: event.index, over: event.index, x: event.x, y: event.y, live: false },
+			state: {
+				id: event.id,
+				from: event.index,
+				over: event.index,
+				x: event.x,
+				y: event.y,
+				live: false,
+			},
 			effect: { type: "none" },
 		};
 	}
@@ -829,12 +974,18 @@ export function applyListDrag(state: ListDragState | null, event: ListDragEvent)
 	}
 	if (event.type === "up") {
 		if (!state.live || state.over === state.from) return { state: null, effect: { type: "none" } };
-		return { state: null, effect: { type: "commit", id: state.id, from: state.from, over: state.over } };
+		return {
+			state: null,
+			effect: { type: "commit", id: state.id, from: state.from, over: state.over },
+		};
 	}
 	if (event.leftWindow) return { state: null, effect: { type: "external", id: state.id } };
 	const moved = Math.hypot(event.x - state.x, event.y - state.y);
 	if (!state.live && moved < LIST_DRAG_THRESHOLD) return { state, effect: { type: "none" } };
-	return { state: { ...state, live: true, over: event.overIndex }, effect: { type: "reorder", overIndex: event.overIndex } };
+	return {
+		state: { ...state, live: true, over: event.overIndex },
+		effect: { type: "reorder", overIndex: event.overIndex },
+	};
 }
 
 export function pointerLeftWindow(x: number, y: number, width: number, height: number): boolean {
