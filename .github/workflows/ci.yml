@@ -30,6 +30,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm fmt
       - run: pnpm test
+      - run: python3 scripts/test-prepare-release.py
       - run: pnpm run build
 
   macos:

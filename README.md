@@ -303,3 +303,9 @@ Profile changes do not remove old artifacts. With no build or development app
 using this checkout, `cargo clean --profile dev` removes generated debug/test
 output. The next development build recompiles dependencies. Release artifacts
 and installed app data are separate from this cache.
+
+## Automated packages
+
+Successful main CI runs publish macOS packages with automatically incremented
+patch versions, beginning at `0.1.1`. See [RELEASE.md](RELEASE.md) for retries,
+credentials, private-repository update limitations, and Rust cache cleanup.
