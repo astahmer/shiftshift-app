@@ -79,7 +79,7 @@ jobs:
           releaseId: ${{ steps.version.outputs.release_id }}
           releaseDraft: true
           includeUpdaterJson: true
-          args: --target universal-apple-darwin
+          args: --target universal-apple-darwin --config src-tauri/tauri.release.conf.json
       - name: Verify release assets and publish
         if: steps.version.outputs.published != 'true'
         env:

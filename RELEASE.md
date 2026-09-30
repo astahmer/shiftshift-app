@@ -47,8 +47,9 @@ old public key cannot accept new updater signatures. The first automated
 release uses a newly configured key; older locally installed builds need a
 manual replacement before using this signing identity.
 
-Apple code signing and notarization are not configured. Releases can provide
-unsigned downloads, but macOS may require manual approval to open them. For
+Apple code signing and notarization are not configured. Automated releases use
+a dedicated Tauri config with signing identity unset, producing unsigned
+downloads; macOS may require manual approval to open them. For
 Developer ID signing and notarization, configure these repository Actions
 secrets from an Apple Developer account:
 
