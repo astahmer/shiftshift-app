@@ -7,14 +7,12 @@ license = "MIT"
 description = "A quick-capture desktop utility — double-tap Shift to save a note/todo/link/image without leaving what you're doing."
 repository = "https://github.com/astahmer/shiftshift-app"
 
-[profile.release]
-strip = "symbols"
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
 
-[profile.release-small]
-inherits = "release"
-lto = "thin"
-codegen-units = 1
-opt-level = "s"
+[profile.dev.package."*"]
+debug = false
 
 [lib]
 name = "shiftshift_tauri_lib"

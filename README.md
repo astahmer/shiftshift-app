@@ -291,17 +291,15 @@ captures and local-to-folder merges publish portable image references and
 assets. Existing remote records with absolute image paths retain their old
 format; those images are only available on the machine that owns the path.
 
-## Build size
+## Rust build cache
 
-Release builds strip symbols automatically. For additional size optimization:
+The development profile keeps line tables for application backtraces, disables
+full debug information for dependencies, and disables incremental compilation.
+The test profile inherits these settings. This reduces generated disk usage;
+repeated code edits may compile more slowly and dependency variables are not
+available in a native debugger.
 
-```bash
-nix develop --command cargo build --manifest-path src-tauri/Cargo.toml --profile release-small
-```
-
-`release-small` enables ThinLTO, one codegen unit, and size optimization. It
-trades build time and potentially runtime speed for smaller executables. Its
-output is under `src-tauri/target/release-small`; normal packaging continues
-to use the standard release profile. Symbol stripping also removes symbol
-names useful for diagnosing native crashes, so retain debug builds for
-investigation.
+Profile changes do not remove old artifacts. With no build or development app
+using this checkout, `cargo clean --profile dev` removes generated debug/test
+output. The next development build recompiles dependencies. Release artifacts
+and installed app data are separate from this cache.
